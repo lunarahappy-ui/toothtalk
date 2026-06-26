@@ -1748,16 +1748,18 @@ function FlipCard3D({card,flipped,onFlip}){
         <div style={{position:"absolute",width:"100%",height:"100%",backfaceVisibility:"hidden",WebkitBackfaceVisibility:"hidden",background:"#fff",borderRadius:22,boxShadow:"0 8px 32px rgba(0,0,0,0.10)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"18px 20px",textAlign:"center"}}>
           <div style={{fontSize:34,marginBottom:8}}>{card.i}</div>
           <div style={{display:"flex",alignItems:"center",gap:8,justifyContent:"center",marginBottom:8}}>
-            <div style={{fontSize:17,fontWeight:900,color:"#0EA5E9",lineHeight:1.3}}>{card.w}</div>
+            <ClickableText text={card.w} style={{fontSize:17,fontWeight:900,color:"#0EA5E9",lineHeight:1.3}}/>
             <SpeakBtn text={card.w} size={30}/>
           </div>
-          <div style={{fontSize:12,color:"#94A3B8"}}>👆 Нажми — перевод</div>
+          <div style={{fontSize:12,color:"#94A3B8"}}>👆 Нажми слово или карточку</div>
         </div>
         {/* Back */}
         <div style={{position:"absolute",width:"100%",height:"100%",backfaceVisibility:"hidden",WebkitBackfaceVisibility:"hidden",background:"linear-gradient(135deg,#0EA5E9,#6366F1)",borderRadius:22,boxShadow:"0 8px 32px rgba(99,102,241,0.3)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"18px 20px",textAlign:"center",transform:"rotateY(180deg)"}}>
           <div style={{fontSize:15,fontWeight:800,color:"#fff",marginBottom:6}}>{card.t}</div>
-          <div style={{fontSize:12,color:"rgba(255,255,255,0.9)",fontStyle:"italic",lineHeight:1.5,marginBottom:10}}>"{card.e}"</div>
-          <SpeakBtn text={card.e} size={32}/>
+          <div style={{display:"flex",alignItems:"center",gap:6,justifyContent:"center",marginBottom:6}}>
+            <ClickableText text={card.e} style={{fontSize:12,color:"rgba(255,255,255,0.9)",fontStyle:"italic",lineHeight:1.5}}/>
+            <SpeakBtn text={card.e} size={28}/>
+          </div>
         </div>
       </div>
     </div>
@@ -1895,6 +1897,27 @@ function LevelConfirm({level,onGo}){
   );
 }
 
+// ── Кликабельные слова ───────────────────────────────────────
+function ClickableText({text, style={}}){
+  const words = text.split(" ");
+  return(
+    <span style={style}>
+      {words.map((word,i)=>{
+        const clean = word.replace(/[.,!?;:'"]/g,"");
+        return(
+          <span key={i}>
+            <span
+              onClick={(e)=>{e.stopPropagation();speak(clean,0.9);haptic("select");playSound("flip");}}
+              style={{cursor:"pointer",borderBottom:"1px dotted #93C5FD",color:"inherit",display:"inline"}}
+            >{word}</span>
+            {i<words.length-1?" ":""}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
 // ── HOME ──────────────────────────────────────────────────────
 function Home({state,onLesson,onDialogue,onMistakes,onProgress,onReset}){
   const {completedLessons,completedDialogues,mistakeBank,totalXP,streak,hearts}=state;
@@ -1909,8 +1932,8 @@ function Home({state,onLesson,onDialogue,onMistakes,onProgress,onReset}){
       <div style={{background:"linear-gradient(135deg,#0F172A,#1E3A5F)",padding:"18px 18px 0",color:"#fff"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
           <div>
-            <div style={{fontSize:10,color:"#64748B",fontWeight:700,letterSpacing:1}}>DENTALINGO</div>
-            <div style={{fontSize:18,fontWeight:800}}>🦷 Хирург-ортопед</div>
+            <div style={{fontSize:10,color:"#64748B",fontWeight:700,letterSpacing:1}}>TOOTHTALK</div>
+            <div style={{fontSize:18,fontWeight:800}}>🦷 {state.specialization==="assistant"?"Ассистент":state.specialization==="admin"?"Администратор":state.specialization==="therapist"?"Терапевт":state.specialization==="ortho"?"Ортодонт":state.specialization==="pediatric"?"Детский стоматолог":"Хирург-ортопед"}</div>
           </div>
           <button onClick={onProgress} style={{background:"rgba(255,255,255,0.1)",border:"none",borderRadius:10,padding:"7px 12px",color:"#fff",fontWeight:700,fontSize:12,cursor:"pointer"}}>📊</button>
         </div>
