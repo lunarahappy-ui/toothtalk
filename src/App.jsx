@@ -2417,51 +2417,6 @@ function LessonScreen({lesson,hearts,onLoseHeart,onComplete,onExit,onAddMistake}
     );
   }
 
-  const q=quizzes[step];
-  return(
-    <div style={{minHeight:"100vh",background:"#F8FAFC",fontFamily:"inherit",display:"flex",flexDirection:"column",animation:shake?"shake 0.4s":undefined}}>
-      {xpPop>0&&<XPPop xp={xpPop} onDone={()=>setXpPop(0)}/>}
-      <div style={{background:"#1E293B",padding:"15px 18px",display:"flex",alignItems:"center",gap:12}}>
-        <button onClick={onExit} style={{background:"none",border:"none",color:"#94A3B8",fontSize:20,cursor:"pointer"}}>✕</button>
-        <div style={{flex:1}}><Bar v={curStep} m={totalSteps} color="#0EA5E9"/></div>
-        <div style={{display:"flex",gap:2}}>{[1,2,3].map(i=><span key={i} style={{fontSize:14,opacity:i<=localH?1:0.25}}>❤️</span>)}</div>
-      </div>
-      <div style={{display:"flex",justifyContent:"center",padding:"10px 0 0"}}><DadChar mood={mood} size={78}/></div>
-      <div style={{flex:1,padding:"10px 18px"}}>
-        <div style={{background:"#fff",borderRadius:16,padding:"14px",marginBottom:12,boxShadow:"0 2px 8px rgba(0,0,0,0.05)"}}>
-          <div style={{fontSize:10,color:"#94A3B8",fontWeight:700,marginBottom:4}}>{q.type==="fill"?"ЗАПОЛНИ ПРОПУСК":"ВЫБЕРИ ОТВЕТ"} · {step+1}/{quizzes.length}</div>
-          <div style={{fontSize:15,fontWeight:700,color:"#1E293B",lineHeight:1.5}}>{q.p||q.t}</div>
-        </div>
-        <div style={{display:"flex",flexDirection:"column",gap:8}}>
-          {q.o.map(opt=>{
-            const isCorrect=opt===q.a;
-            const isSelected=sel===opt;
-            let bg="#fff",border="2px solid #E2E8F0",col="#1E293B",emoji="";
-            if(confirmed&&isCorrect){bg="#D1FAE5";border="2px solid #10B981";col="#065F46";emoji=" ✅";}
-            else if(isSelected&&confirmed&&!isCorrect){bg="#FEE2E2";border="2px solid #EF4444";col="#991B1B";emoji=" ❌";}
-            else if(isSelected&&!confirmed){bg="#DBEAFE";border="2px solid #3B82F6";col="#1D4ED8";}
-            return <button key={opt} onClick={()=>!confirmed&&setSel(opt)} style={{background:bg,border,color:col,borderRadius:13,padding:"13px 14px",fontSize:14,fontWeight:500,textAlign:"left",cursor:confirmed?"default":"pointer",fontFamily:"inherit",lineHeight:1.4,transition:"all 0.2s",transform:isSelected&&confirmed&&!isCorrect?"scale(0.98)":"scale(1)"}}>{opt}{emoji}</button>;
-          })}
-        </div>
-      </div>
-      <div style={{padding:"12px 18px",background:confirmed?(sel===q.a?"#D1FAE5":"#FEE2E2"):"#fff",borderTop:"1px solid #E2E8F0"}}>
-        {!confirmed?<Btn onClick={confirm} disabled={!sel} color="#0EA5E9">Проверить</Btn>
-        :<div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-          <div>
-            <div style={{fontWeight:800,color:sel===q.a?"#065F46":"#991B1B",fontSize:18}}>{sel===q.a?"🔥 Верно!":"💔 Неверно"}</div>
-            {sel!==q.a&&<div style={{display:"flex",alignItems:"center",gap:6,marginTop:2}}>
-              <div style={{fontSize:11,color:"#64748B",maxWidth:200}}>→ {q.a}</div>
-              <SpeakBtn text={q.a} size={26}/>
-            </div>}
-          </div>
-          <button onClick={nextQ} style={{background:sel===q.a?"#10B981":"#EF4444",color:"#fff",border:"none",borderRadius:12,padding:"9px 18px",fontWeight:700,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>Далее →</button>
-        </div>}
-      </div>
-      <style>{`@keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-8px)}75%{transform:translateX(8px)}}`}</style>
-    </div>
-  );
-}
-
 // ── MISTAKES DRILL ────────────────────────────────────────────
 function MistakesDrill({mistakes,onComplete,onExit}){
   const [idx,setIdx]=useState(0);
