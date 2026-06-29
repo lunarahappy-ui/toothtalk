@@ -2373,9 +2373,6 @@ function LessonScreen({lesson,hearts,onLoseHeart,onComplete,onExit,onAddMistake}
     if(cardIdx+1>=cards.length) setPhase("quiz");
     else setCardIdx(c=>c+1);
   }
-    if(step+1>=quizzes.length){playSound("complete");haptic("heavy");setShowConfetti(true);setDone(true);}
-    else{setStep(s=>s+1);setSel(null);setConfirmed(false);setMood("thinking");}
-  }
 
   if(done)return(
     <div style={{minHeight:"100vh",background:"linear-gradient(160deg,#065F46,#10B981)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:28,fontFamily:"inherit",textAlign:"center"}}>
@@ -2416,6 +2413,7 @@ function LessonScreen({lesson,hearts,onLoseHeart,onComplete,onExit,onAddMistake}
       </div>
     );
   }
+}
 
 // ── MISTAKES DRILL ────────────────────────────────────────────
 function MistakesDrill({mistakes,onComplete,onExit}){
