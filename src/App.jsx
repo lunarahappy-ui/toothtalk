@@ -2349,23 +2349,16 @@ function DialogueScreen({dialogue,onComplete,onExit}){
 // ── LESSON SCREEN ─────────────────────────────────────────────
 function LessonScreen({lesson,hearts,onLoseHeart,onComplete,onExit,onAddMistake}){
   const cards=lesson.cards||[];
-  // Автогенерируем квизы из карточек — игнорируем старые mcq с 2 вариантами
-  const rawQuizzes=lesson.quiz||[];
-  const hasRichQuiz=rawQuizzes.some(q=>q.o&&q.o.length>=4);
-  const quizzes=hasRichQuiz ? rawQuizzes : generateQuizzes(cards, ALL_LESSONS.flatMap(l=>l.cards||[]));
-
+  const quizzes=lesson.quiz||[];
   const [phase,setPhase]=useState(cards.length>0?"cards":"quiz");
   const [cardIdx,setCardIdx]=useState(0);
   const [flipped,setFlipped]=useState(false);
   const [xpPop,setXpPop]=useState(0);
   const [showConfetti,setShowConfetti]=useState(false);
 
-  useEffect(()=>{if(phase==="cards"&&cards[cardIdx])speak(cards[cardIdx].w);},[cardIdx,phase]);
-
-  if(phase==="quiz") return <QuizEngine quizzes={quizzes} lesson={lesson} hearts={hearts} onLoseHeart={onLoseHeart} onComplete={onComplete} onAddMistake={onAddMistake} onExit={onExit}/>;
-
-  const totalSteps=cards.length+quizzes.length;
-  const curStep=cardIdx;
+  useEffect(()=>{
+    if(phase==="cards"&&cards[cardIdx]) speak(cards[cardIdx].w);
+  },[cardIdx,phase]);
 
   function nextCard(){
     haptic("light");
@@ -2374,45 +2367,50 @@ function LessonScreen({lesson,hearts,onLoseHeart,onComplete,onExit,onAddMistake}
     else setCardIdx(c=>c+1);
   }
 
-  if(done)return(
-    <div style={{minHeight:"100vh",background:"linear-gradient(160deg,#065F46,#10B981)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:28,fontFamily:"inherit",textAlign:"center"}}>
-      {showConfetti&&<Confetti/>}
-      <div style={{display:"flex",gap:6,alignItems:"flex-end",marginBottom:12}}>
-        <DadChar mood="celebrate" size={100}/><MomChar mood="cheer" size={88}/><Girl4 size={56}/><Baby1 size={46}/>
+  // Quiz phase → use QuizEngine
+  if(phase==="quiz"){
+    // Build rich quizzes from cards if existing quizzes are too simple
+    const richQuizzes = quizzes.length > 0 ? quizzes : cards.map((card,i)=>({
+      type: i%2===0 ? "mcq" : "translate",
+      p: i%2===0 ? `Что значит "${card.w}"?` : `Переведи: "${card.w}"`,
+      prompt: card.w,
+      a: i%2===0 ? card.t : card.t,
+      o: [card.t, "зуб", "боль", "рот"].filter((v,idx,arr)=>arr.indexOf(v)===idx).slice(0,4)
+    }));
+    return <QuizEngine
+      quizzes={richQuizzes}
+      lesson={lesson}
+      hearts={hearts}
+      onLoseHeart={onLoseHeart}
+      onComplete={onComplete}
+      onAddMistake={onAddMistake}
+      onExit={onExit}
+    />;
+  }
+
+  // Cards phase
+  const card=cards[cardIdx];
+  const totalSteps=cards.length+quizzes.length;
+
+  return(
+    <div style={{minHeight:"100vh",background:"#F8FAFC",fontFamily:"inherit",display:"flex",flexDirection:"column"}}>
+      {xpPop>0&&<XPPop xp={xpPop} onDone={()=>setXpPop(0)}/>}
+      <div style={{background:"#1E293B",padding:"15px 18px",display:"flex",alignItems:"center",gap:12}}>
+        <button onClick={onExit} style={{background:"none",border:"none",color:"#94A3B8",fontSize:20,cursor:"pointer"}}>✕</button>
+        <div style={{flex:1}}><Bar v={cardIdx} m={totalSteps} color="#0EA5E9"/></div>
+        <span style={{color:"#94A3B8",fontSize:11,fontWeight:700}}>{cardIdx+1}/{cards.length}</span>
       </div>
-      <div style={{background:"#fff",borderRadius:24,padding:"26px 22px",maxWidth:340,width:"100%"}}>
-        <div style={{fontSize:24,fontWeight:900,color:"#10B981",marginBottom:4}}>🎉 Урок пройден!</div>
-        <div style={{color:"#64748B",fontSize:13,marginBottom:18}}>{lesson.icon} {lesson.title}</div>
-        <div style={{display:"flex",justifyContent:"center",gap:28,marginBottom:22}}>
-          <div><div style={{fontSize:24,fontWeight:800,color:"#10B981"}}>+{xp}</div><div style={{fontSize:12,color:"#94A3B8"}}>XP</div></div>
-          <div><div style={{fontSize:20,fontWeight:800,color:"#EF4444"}}>{"❤️".repeat(Math.max(0,localH))||"💔"}</div><div style={{fontSize:12,color:"#94A3B8"}}>жизней</div></div>
-        </div>
-        <Btn onClick={()=>onComplete(xp)} color="#10B981">Продолжить!</Btn>
+      <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"20px 18px",gap:14}}>
+        <div style={{fontSize:11,color:"#94A3B8",fontWeight:700,letterSpacing:1}}>НОВАЯ ФРАЗА · {cardIdx+1}/{cards.length}</div>
+        <FlipCard3D card={card} flipped={flipped} onFlip={()=>{haptic("light");playSound("flip");if(!flipped)speak(card.e,0.8);setFlipped(f=>!f);}}/>
+        {flipped&&<div style={{display:"flex",gap:10}}>
+          <button onPointerDown={()=>haptic("select")} onClick={nextCard} style={{background:"#10B981",color:"#fff",border:"none",borderRadius:14,padding:"11px 22px",fontWeight:700,fontSize:14,cursor:"pointer",fontFamily:"inherit",boxShadow:"0 4px 12px #10B98155"}}>Знаю ✓</button>
+          <button onPointerDown={()=>haptic("select")} onClick={()=>{speak(card.w);nextCard();}} style={{background:"#F1F5F9",color:"#64748B",border:"none",borderRadius:14,padding:"11px 22px",fontWeight:700,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>🔊 Ещё раз</button>
+        </div>}
+        <DadChar mood="happy" size={65}/>
       </div>
     </div>
   );
-
-  if(phase==="cards"){
-    const card=cards[cardIdx];
-    return(
-      <div style={{minHeight:"100vh",background:"#F8FAFC",fontFamily:"inherit",display:"flex",flexDirection:"column"}}>
-        <div style={{background:"#1E293B",padding:"15px 18px",display:"flex",alignItems:"center",gap:12}}>
-          <button onClick={onExit} style={{background:"none",border:"none",color:"#94A3B8",fontSize:20,cursor:"pointer"}}>✕</button>
-          <div style={{flex:1}}><Bar v={curStep} m={totalSteps} color="#0EA5E9"/></div>
-          <span style={{color:"#94A3B8",fontSize:11,fontWeight:700}}>{cardIdx+1}/{cards.length}</span>
-        </div>
-        <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"20px 18px",gap:14}}>
-          <div style={{fontSize:11,color:"#94A3B8",fontWeight:700,letterSpacing:1}}>НОВАЯ ФРАЗА · {cardIdx+1}/{cards.length}</div>
-          <FlipCard3D card={card} flipped={flipped} onFlip={()=>{haptic("light");playSound("flip");if(!flipped)speak(card.e,0.8);setFlipped(f=>!f);}}/>
-          {flipped&&<div style={{display:"flex",gap:10}}>
-            <button onPointerDown={()=>haptic("select")} onClick={nextCard} style={{background:"#10B981",color:"#fff",border:"none",borderRadius:14,padding:"11px 22px",fontWeight:700,fontSize:14,cursor:"pointer",fontFamily:"inherit",boxShadow:"0 4px 12px #10B98155"}}>Знаю ✓</button>
-            <button onPointerDown={()=>haptic("select")} onClick={()=>{speak(card.w);nextCard();}} style={{background:"#F1F5F9",color:"#64748B",border:"none",borderRadius:14,padding:"11px 22px",fontWeight:700,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>🔊 Ещё раз</button>
-          </div>}
-          <DadChar mood="happy" size={65}/>
-        </div>
-      </div>
-    );
-  }
 }
 
 // ── MISTAKES DRILL ────────────────────────────────────────────
