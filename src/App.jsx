@@ -276,6 +276,106 @@ function SpecializationSelect({onSelect}){
   );
 }
 // ═══════════════════════════════════════════════════════════════
+// АВТОГЕНЕРАТОР КВИЗОВ ИЗ КАРТОЧЕК
+// Берёт карточки урока и создаёт 5 типов заданий автоматически
+// ═══════════════════════════════════════════════════════════════
+
+function shuffle(arr){ return [...arr].sort(()=>Math.random()-0.5); }
+
+function getWrongOptions(correct, allCards, field, count=3){
+  // берём неправильные варианты из других карточек урока и соседних
+  const others = allCards
+    .filter(c => c[field] !== correct)
+    .map(c => c[field]);
+  const shuffled = shuffle(others);
+  // если мало вариантов — добавляем дефолтные
+  const defaults = field==="t"
+    ? ["зуб","десна","боль","укол","рот","нерв","кость","кариес","коронка","протез"]
+    : ["tooth","pain","gum","nerve","bone","crown","implant","fill","drill","rinse"];
+  const pool = [...new Set([...shuffled, ...defaults.filter(d=>d!==correct)])];
+  return pool.slice(0,count);
+}
+
+function generateQuizzes(cards, allUnitsCards=[]){
+  if(!cards||cards.length===0) return [];
+  const pool = [...cards, ...allUnitsCards.slice(0,10)];
+  const quizzes = [];
+
+  cards.forEach((card, i) => {
+    const wrongEN = getWrongOptions(card.w, pool, "w");
+    const wrongRU = getWrongOptions(card.t, pool, "t");
+
+    // Тип 1: MCQ — видишь RU → выбираешь EN
+    if(i % 4 === 0){
+      quizzes.push({
+        type:"mcq",
+        p:`Как сказать по-английски: "${card.t}"?`,
+        a: card.w,
+        o: shuffle([card.w, ...wrongEN.slice(0,3)])
+      });
+    }
+    // Тип 2: MCQ — видишь EN → выбираешь RU
+    else if(i % 4 === 1){
+      quizzes.push({
+        type:"translate",
+        prompt: card.w,
+        p:`Переведи: "${card.w}"`,
+        a: card.t,
+        o: shuffle([card.t, ...wrongRU.slice(0,3)])
+      });
+    }
+    // Тип 3: Listen → выбираешь слово
+    else if(i % 4 === 2){
+      quizzes.push({
+        type:"listen",
+        word: card.w,
+        p:"Послушай и выбери слово:",
+        a: card.w,
+        o: shuffle([card.w, ...wrongEN.slice(0,3)])
+      });
+    }
+    // Тип 4: Wordbank или Type — составь/напиши
+    else {
+      // Для коротких слов (1 слово) — type
+      if(card.w.split(" ").length <= 2){
+        quizzes.push({
+          type:"type",
+          p:`Напиши по-английски: "${card.t}"`,
+          a: card.w.toLowerCase(),
+          alts: [card.w.toLowerCase()]
+        });
+      } else {
+        // Для фраз — wordbank
+        const words = card.w.split(" ");
+        const extraWords = getWrongOptions(card.w, pool, "w")
+          .join(" ").split(" ")
+          .filter(w => !words.includes(w))
+          .slice(0,3);
+        quizzes.push({
+          type:"wordbank",
+          p:`Составь фразу: "${card.t}"`,
+          a: card.w,
+          extra: extraWords,
+          o: []
+        });
+      }
+    }
+  });
+
+  // Всегда добавляем финальный MCQ на ключевое слово (new:true)
+  const keyCard = cards.find(c=>c.new) || cards[0];
+  if(keyCard){
+    quizzes.push({
+      type:"mcq",
+      p:`Главное слово урока — что значит "${keyCard.w}"?`,
+      a: keyCard.t,
+      o: shuffle([keyCard.t, ...getWrongOptions(keyCard.t, pool, "t")])
+    });
+  }
+
+  return quizzes;
+}
+// ═══════════════════════════════════════════════════════════════
 // НОВЫЙ ДВИЖОК ЗАДАНИЙ — 5 типов как в Duolingo
 // ═══════════════════════════════════════════════════════════════
 
@@ -1669,7 +1769,7 @@ function XPPop({xp,onDone}){
   );
 }
 
-const SK = "toothtalk_surgeon_v4";
+const SK = "toothtalk_v1";
 const DEFAULT = {screen:"welcome",level:null,specialization:null,completedLessons:[],completedDialogues:[],mistakeBank:[],totalXP:0,streak:0,lastDate:null,hearts:3};
 function loadState(){try{const s=localStorage.getItem(SK);return s?{...DEFAULT,...JSON.parse(s)}:DEFAULT}catch{return DEFAULT}}
 function saveState(s){try{localStorage.setItem(SK,JSON.stringify(s))}catch{}}
@@ -1999,7 +2099,8 @@ function Home({state,onLesson,onDialogue,onMistakes,onProgress,onReset}){
                     {unit.lessons.map((lesson,idx)=>{
                       const comp=completedLessons.includes(lesson.id);
                       const isNext=lesson.id===next?.id;
-                      const locked=idx>0&&!completedLessons.includes(unit.lessons[idx-1]?.id)&&!comp&&!isNext;
+                      const prevLesson=unit.lessons[idx-1];
+                      const locked=idx>0&&!completedLessons.includes(prevLesson?.id)&&!comp&&!isNext;
                       return(
                         <div key={lesson.id} onClick={()=>!locked&&onLesson(lesson)} style={{background:"#fff",borderRadius:12,padding:"10px 12px",display:"flex",alignItems:"center",gap:8,border:isNext?`2px solid ${unit.color}`:comp?"2px solid #D1FAE5":"2px solid transparent",opacity:locked?0.4:1,cursor:locked?"not-allowed":"pointer",boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
                           <div style={{width:32,height:32,borderRadius:8,background:comp?"#D1FAE5":isNext?unit.color+"22":"#F1F5F9",display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,flexShrink:0}}>{comp?"✅":locked?"🔒":lesson.icon}</div>
@@ -2248,57 +2349,30 @@ function DialogueScreen({dialogue,onComplete,onExit}){
 // ── LESSON SCREEN ─────────────────────────────────────────────
 function LessonScreen({lesson,hearts,onLoseHeart,onComplete,onExit,onAddMistake}){
   const cards=lesson.cards||[];
-  const quizzes=lesson.quiz||[];
+  // Автогенерируем квизы из карточек — игнорируем старые mcq с 2 вариантами
+  const rawQuizzes=lesson.quiz||[];
+  const hasRichQuiz=rawQuizzes.some(q=>q.o&&q.o.length>=4);
+  const quizzes=hasRichQuiz ? rawQuizzes : generateQuizzes(cards, ALL_LESSONS.flatMap(l=>l.cards||[]));
+
   const [phase,setPhase]=useState(cards.length>0?"cards":"quiz");
-  // If in quiz phase, delegate to QuizEngine
-  if(phase==="quiz") return <QuizEngine quizzes={quizzes} lesson={lesson} hearts={hearts} onLoseHeart={onLoseHeart} onComplete={onComplete} onAddMistake={onAddMistake} onExit={onExit}/>;
-  const [dummyPhase,setDummyPhase]=useState("cards"); // kept for cards phase below
   const [cardIdx,setCardIdx]=useState(0);
   const [flipped,setFlipped]=useState(false);
-  const [step,setStep]=useState(0);
-  const [sel,setSel]=useState(null);
-  const [confirmed,setConfirmed]=useState(false);
-  const [localH,setLocalH]=useState(hearts);
-  const [xp,setXp]=useState(0);
-  const [shake,setShake]=useState(false);
-  const [done,setDone]=useState(false);
-  const [mood,setMood]=useState("happy");
   const [xpPop,setXpPop]=useState(0);
   const [showConfetti,setShowConfetti]=useState(false);
-  const totalSteps=cards.length+quizzes.length;
-  const curStep=phase==="cards"?cardIdx:cards.length+step;
 
   useEffect(()=>{if(phase==="cards"&&cards[cardIdx])speak(cards[cardIdx].w);},[cardIdx,phase]);
+
+  if(phase==="quiz") return <QuizEngine quizzes={quizzes} lesson={lesson} hearts={hearts} onLoseHeart={onLoseHeart} onComplete={onComplete} onAddMistake={onAddMistake} onExit={onExit}/>;
+
+  const totalSteps=cards.length+quizzes.length;
+  const curStep=cardIdx;
 
   function nextCard(){
     haptic("light");
     setFlipped(false);
-    if(cardIdx+1>=cards.length)setPhase("quiz");
+    if(cardIdx+1>=cards.length) setPhase("quiz");
     else setCardIdx(c=>c+1);
   }
-  function confirm(){
-    if(!sel||confirmed)return;setConfirmed(true);
-    const q=quizzes[step];
-    if(sel===q.a){
-      setMood("excited");
-      const earned=Math.round(lesson.xp/Math.max(1,quizzes.length));
-      setXp(x=>x+earned);
-      setXpPop(earned);
-      playSound("correct");
-      haptic("success");
-      speak(q.a,0.85);
-    } else {
-      setMood("wrong");setLocalH(h=>Math.max(0,h-1));onLoseHeart();
-      setShake(true);setTimeout(()=>setShake(false),500);
-      playSound("wrong");
-      haptic("error");
-      speak(q.a,0.8);
-      onAddMistake({wrong:sel,correct:q.a,lesson:lesson.title});
-    }
-  }
-  function nextQ(){
-    if(localH===0){onExit();return;}
-    haptic("light");
     if(step+1>=quizzes.length){playSound("complete");haptic("heavy");setShowConfetti(true);setDone(true);}
     else{setStep(s=>s+1);setSel(null);setConfirmed(false);setMood("thinking");}
   }
@@ -2431,8 +2505,8 @@ function MistakesDrill({mistakes,onComplete,onExit}){
 }
 
 // ── PROGRESS ──────────────────────────────────────────────────
-function ProgressScreen({state,onBack}){
-  const {level,completedLessons,completedDialogues,totalXP,streak,mistakeBank}=state;
+function ProgressScreen({state,onBack,onChangeSpec}){
+  const {level,completedLessons,completedDialogues,totalXP,streak,mistakeBank,specialization}=state;
   const done=completedLessons.length;
   return(
     <div style={{minHeight:"100vh",background:"#F8FAFC",fontFamily:"inherit"}}>
@@ -2468,6 +2542,11 @@ function ProgressScreen({state,onBack}){
             </div>
           );
         })}
+        <div style={{marginTop:20,display:"flex",flexDirection:"column",gap:8}}>
+          <button onClick={onChangeSpec} style={{background:"#F1F5F9",color:"#64748B",border:"none",borderRadius:12,padding:"12px",fontWeight:700,fontSize:13,cursor:"pointer",width:"100%"}}>
+            🔄 Сменить специализацию или уровень
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -2498,6 +2577,17 @@ export default function App(){
   }
 
   // ── новый флоу: welcome → specialization → levelselect → confirm → home
+  // Если уже есть специализация и уровень — сразу home
+  if(state.screen==="welcome" && state.specialization && state.level){
+    return <Home
+      state={state}
+      onLesson={l=>{setActiveLesson(l);go("lesson");}}
+      onDialogue={d=>{setActiveDialogue(d);go("dialogue");}}
+      onMistakes={()=>setMistakeDrill(true)}
+      onProgress={()=>go("progress")}
+      onReset={()=>{const r={...DEFAULT};setState(r);saveState(r);setActiveLesson(null);setActiveDialogue(null);}}
+    />;
+  }
   if(state.screen==="welcome")return <Welcome onStart={()=>go("specialization")}/>;
   if(state.screen==="specialization")return <SpecializationSelect onSelect={sp=>{
     setState(s=>({...s,specialization:sp,screen:"levelselect"}));
@@ -2514,7 +2604,7 @@ export default function App(){
     const unlocked=ALL_LESSONS.slice(0,startIdx).map(l=>l.id);
     setState(s=>({...s,completedLessons:unlocked,screen:"home"}));
   }}/>;
-  if(state.screen==="progress")return <ProgressScreen state={state} onBack={()=>go("home")}/>;
+  if(state.screen==="progress")return <ProgressScreen state={state} onBack={()=>go("home")} onChangeSpec={()=>go("specialization")}/>;
 
   if(state.screen==="lesson"&&activeLesson)return(
     <LessonScreen lesson={activeLesson} hearts={state.hearts}
