@@ -2249,7 +2249,7 @@ function ClickableText({text, style={}}){
 }
 
 // ── HOME ──────────────────────────────────────────────────────
-function Home({state,onLesson,onDialogue,onMistakes,onProgress,onReset,onReview}){
+function Home({state,onLesson,onDialogue,onMistakes,onProgress,onReset,onReview,onAchievements}){
   const {completedLessons,completedDialogues,mistakeBank,totalXP,streak,hearts}=state;
   const done=completedLessons.length;
   const next=ALL_LESSONS.find(l=>!completedLessons.includes(l.id));
@@ -2262,7 +2262,6 @@ function Home({state,onLesson,onDialogue,onMistakes,onProgress,onReset,onReview}
 
   return(
     <div style={{minHeight:"100vh",background:"#F0F9FF",fontFamily:"inherit"}}>
-      {newAchievement&&<AchievementToast achievement={newAchievement} onDone={()=>setNewAchievement(null)}/>}
       <div style={{background:"linear-gradient(135deg,#0F172A,#1E3A5F)",padding:"18px 18px 0",color:"#fff"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
           <div>
@@ -2270,7 +2269,7 @@ function Home({state,onLesson,onDialogue,onMistakes,onProgress,onReset,onReview}
             <div style={{fontSize:18,fontWeight:800}}>🦷 {state.specialization==="assistant"?"Ассистент":state.specialization==="admin"?"Администратор":state.specialization==="therapist"?"Терапевт":state.specialization==="ortho"?"Ортодонт":state.specialization==="pediatric"?"Детский стоматолог":"Хирург-ортопед"}</div>
           </div>
           <div style={{display:"flex",gap:6}}>
-            <button onClick={()=>go("achievements")} style={{background:"rgba(255,255,255,0.1)",border:"none",borderRadius:10,padding:"7px 12px",color:"#fff",fontWeight:700,fontSize:12,cursor:"pointer"}}>🏆</button>
+            <button onClick={onAchievements} style={{background:"rgba(255,255,255,0.1)",border:"none",borderRadius:10,padding:"7px 12px",color:"#fff",fontWeight:700,fontSize:12,cursor:"pointer"}}>🏆</button>
             <button onClick={onProgress} style={{background:"rgba(255,255,255,0.1)",border:"none",borderRadius:10,padding:"7px 12px",color:"#fff",fontWeight:700,fontSize:12,cursor:"pointer"}}>📊</button>
           </div>
         </div>
@@ -2846,15 +2845,18 @@ export default function App(){
     />
   );
 
-  return <Home
+  return <>
+    {newAchievement&&<AchievementToast achievement={newAchievement} onDone={()=>setNewAchievement(null)}/>}
+    <Home
     state={state}
     onLesson={l=>{setActiveLesson(l);go("lesson");}}
     onDialogue={d=>{setActiveDialogue(d);go("dialogue");}}
     onMistakes={()=>setMistakeDrill(true)}
     onProgress={()=>go("progress")}
+    onAchievements={()=>go("achievements")}
     onReview={words=>{setSrsReview(words);go("srsreview");}}
     onReset={()=>{const r={...DEFAULT};setState(r);saveState(r);setActiveLesson(null);setActiveDialogue(null);}}
-  />;
+  /></>;
 }
 
 // ── SRS REVIEW NOTIFICATION ──────────────────────────────────
