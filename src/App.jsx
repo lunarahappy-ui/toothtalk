@@ -276,205 +276,441 @@ function SpecializationSelect({onSelect}){
   );
 }
 // ═══════════════════════════════════════════════════════════════
-// АВТОГЕНЕРАТОР КВИЗОВ ИЗ КАРТОЧЕК
-// Берёт карточки урока и создаёт 5 типов заданий автоматически
+// ДОСТИЖЕНИЯ + ЕЖЕНЕДЕЛЬНЫЕ ЦЕЛИ + СТАТИСТИКА
 // ═══════════════════════════════════════════════════════════════
 
-function shuffle(arr){ return [...arr].sort(()=>Math.random()-0.5); }
+const ACHIEVEMENTS = [
+  {id:"first_lesson", icon:"🎯", title:"Первый шаг", desc:"Пройди первый урок", check:(s)=>s.completedLessons.length>=1},
+  {id:"streak_3",     icon:"🔥", title:"Горячая серия", desc:"3 дня подряд", check:(s)=>s.streak>=3},
+  {id:"streak_7",     icon:"🔥🔥", title:"Неделя огня", desc:"7 дней подряд", check:(s)=>s.streak>=7},
+  {id:"streak_30",    icon:"⚡", title:"Месяц силы", desc:"30 дней подряд", check:(s)=>s.streak>=30},
+  {id:"xp_100",       icon:"⚡", title:"100 XP", desc:"Набери 100 XP", check:(s)=>s.totalXP>=100},
+  {id:"xp_500",       icon:"💫", title:"500 XP", desc:"Набери 500 XP", check:(s)=>s.totalXP>=500},
+  {id:"xp_1000",      icon:"🌟", title:"1000 XP", desc:"Настоящий профи", check:(s)=>s.totalXP>=1000},
+  {id:"lessons_5",    icon:"📚", title:"5 уроков", desc:"Пройди 5 уроков", check:(s)=>s.completedLessons.length>=5},
+  {id:"lessons_10",   icon:"📖", title:"10 уроков", desc:"Пройди 10 уроков", check:(s)=>s.completedLessons.length>=10},
+  {id:"lessons_30",   icon:"🎓", title:"30 уроков", desc:"Почти эксперт!", check:(s)=>s.completedLessons.length>=30},
+  {id:"lessons_65",   icon:"🏆", title:"Мастер", desc:"Все 65 уроков!", check:(s)=>s.completedLessons.length>=65},
+  {id:"no_mistakes",  icon:"💎", title:"Идеально", desc:"Урок без ошибок", check:(s)=>s.perfectLessons>=1},
+  {id:"dialogues_all",icon:"💬", title:"Дипломат", desc:"Все диалоги", check:(s)=>s.completedDialogues.length>=4},
+  {id:"hearts_full",  icon:"❤️", title:"Без потерь", desc:"3/3 жизни после урока", check:(s)=>s.hearts>=3},
+  {id:"srs_master",   icon:"🧠", title:"Память", desc:"Повтори 10 слов SRS", check:(s)=>(s.srsCount||0)>=10},
+];
 
-function getWrongOptions(correct, allCards, field, count=3){
-  // берём неправильные варианты из других карточек урока и соседних
-  const others = allCards
-    .filter(c => c[field] !== correct)
-    .map(c => c[field]);
-  const shuffled = shuffle(others);
-  // если мало вариантов — добавляем дефолтные
-  const defaults = field==="t"
-    ? ["зуб","десна","боль","укол","рот","нерв","кость","кариес","коронка","протез"]
-    : ["tooth","pain","gum","nerve","bone","crown","implant","fill","drill","rinse"];
-  const pool = [...new Set([...shuffled, ...defaults.filter(d=>d!==correct)])];
-  return pool.slice(0,count);
+function getUnlocked(state){
+  return ACHIEVEMENTS.filter(a=>a.check(state));
 }
 
-function generateQuizzes(cards, allUnitsCards=[]){
-  if(!cards||cards.length===0) return [];
-  const pool = [...cards, ...allUnitsCards.slice(0,10)];
-  const quizzes = [];
+function checkNewAchievements(oldState, newState){
+  const oldUnlocked=getUnlocked(oldState).map(a=>a.id);
+  const newUnlocked=getUnlocked(newState).filter(a=>!oldUnlocked.includes(a.id));
+  return newUnlocked;
+}
 
-  cards.forEach((card, i) => {
-    const wrongEN = getWrongOptions(card.w, pool, "w");
-    const wrongRU = getWrongOptions(card.t, pool, "t");
+// ── Экран достижений ─────────────────────────────────────────
+function AchievementsScreen({state, onBack}){
+  const unlocked=getUnlocked(state);
+  const unlockedIds=unlocked.map(a=>a.id);
 
-    // Тип 1: MCQ — видишь RU → выбираешь EN
-    if(i % 4 === 0){
+  return(
+    <div style={{minHeight:"100vh",background:"#F8FAFC",fontFamily:"inherit"}}>
+      <div style={{background:"linear-gradient(135deg,#0F172A,#1E3A5F)",padding:"18px 18px 22px",color:"#fff"}}>
+        <button onClick={onBack} style={{background:"none",border:"none",color:"#94A3B8",fontSize:18,cursor:"pointer",marginBottom:10}}>← Назад</button>
+        <div style={{fontSize:22,fontWeight:900}}>🏆 Достижения</div>
+        <div style={{fontSize:13,color:"#94A3B8",marginTop:4}}>{unlocked.length} / {ACHIEVEMENTS.length} получено</div>
+        <div style={{marginTop:10}}>
+          <div style={{background:"rgba(255,255,255,0.1)",borderRadius:99,height:6,overflow:"hidden"}}>
+            <div style={{width:`${Math.round(unlocked.length/ACHIEVEMENTS.length*100)}%`,height:"100%",background:"#F59E0B",borderRadius:99,transition:"width 0.5s"}}/>
+          </div>
+        </div>
+      </div>
+      <div style={{padding:"16px",display:"flex",flexDirection:"column",gap:10,paddingBottom:80}}>
+        {ACHIEVEMENTS.map(a=>{
+          const isUnlocked=unlockedIds.includes(a.id);
+          return(
+            <div key={a.id} style={{background:"#fff",borderRadius:16,padding:"14px 16px",display:"flex",alignItems:"center",gap:12,boxShadow:"0 2px 8px rgba(0,0,0,0.05)",opacity:isUnlocked?1:0.5}}>
+              <div style={{fontSize:32,width:44,textAlign:"center",filter:isUnlocked?"none":"grayscale(1)"}}>{a.icon}</div>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:700,fontSize:14,color:isUnlocked?"#1E293B":"#94A3B8"}}>{a.title}</div>
+                <div style={{fontSize:12,color:"#64748B",marginTop:2}}>{a.desc}</div>
+              </div>
+              {isUnlocked&&<div style={{fontSize:18}}>✅</div>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Всплывающее уведомление о достижении ─────────────────────
+function AchievementToast({achievement, onDone}){
+  useEffect(()=>{
+    playSound("complete");
+    haptic("heavy");
+    const t=setTimeout(onDone,3000);
+    return()=>clearTimeout(t);
+  },[]);
+  return(
+    <div style={{position:"fixed",top:60,left:"50%",transform:"translateX(-50%)",zIndex:1000,pointerEvents:"none",animation:"slidedown 0.4s ease-out",width:"90%",maxWidth:340}}>
+      <div style={{background:"linear-gradient(135deg,#F59E0B,#EF4444)",borderRadius:20,padding:"14px 18px",boxShadow:"0 8px 32px rgba(245,158,11,0.4)",display:"flex",alignItems:"center",gap:12}}>
+        <div style={{fontSize:36}}>{achievement.icon}</div>
+        <div>
+          <div style={{color:"rgba(255,255,255,0.8)",fontSize:11,fontWeight:700}}>🏆 ДОСТИЖЕНИЕ РАЗБЛОКИРОВАНО!</div>
+          <div style={{color:"#fff",fontSize:16,fontWeight:900}}>{achievement.title}</div>
+          <div style={{color:"rgba(255,255,255,0.8)",fontSize:12}}>{achievement.desc}</div>
+        </div>
+      </div>
+      <style>{`@keyframes slidedown{from{transform:translateX(-50%) translateY(-80px);opacity:0}to{transform:translateX(-50%) translateY(0);opacity:1}}`}</style>
+    </div>
+  );
+}
+
+// ── Еженедельные цели ─────────────────────────────────────────
+const WEEKLY_GOALS = [
+  {id:"lessons", icon:"📚", title:"Уроков в неделю", target:5},
+  {id:"xp",      icon:"⚡", title:"XP в неделю",     target:100},
+  {id:"streak",  icon:"🔥", title:"Дней подряд",     target:5},
+];
+
+function WeeklyGoals({state}){
+  const weekStart=getWeekStart();
+  const weekKey=`week_${weekStart}`;
+  const weekData=JSON.parse(localStorage.getItem(weekKey)||"{}");
+
+  const progress={
+    lessons: weekData.lessons||0,
+    xp: weekData.xp||0,
+    streak: state.streak||0,
+  };
+
+  return(
+    <div style={{background:"#fff",borderRadius:16,padding:"14px 16px",boxShadow:"0 2px 8px rgba(0,0,0,0.05)",marginBottom:14}}>
+      <div style={{fontSize:11,fontWeight:700,color:"#64748B",marginBottom:10,letterSpacing:1}}>📅 ЦЕЛИ НЕДЕЛИ</div>
+      {WEEKLY_GOALS.map(g=>{
+        const val=progress[g.id]||0;
+        const pct=Math.min(100,Math.round(val/g.target*100));
+        const done=pct>=100;
+        return(
+          <div key={g.id} style={{marginBottom:10}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+              <div style={{fontSize:13,fontWeight:600,color:"#1E293B"}}>{g.icon} {g.title}</div>
+              <div style={{fontSize:12,fontWeight:700,color:done?"#10B981":"#64748B"}}>{val}/{g.target} {done?"✅":""}</div>
+            </div>
+            <div style={{background:"#F1F5F9",borderRadius:99,height:6}}>
+              <div style={{width:`${pct}%`,height:"100%",background:done?"#10B981":"#0EA5E9",borderRadius:99,transition:"width 0.5s"}}/>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function getWeekStart(){
+  const now=new Date();
+  const day=now.getDay();
+  const diff=now.getDate()-day+(day===0?-6:1);
+  return new Date(now.setDate(diff)).toDateString();
+}
+
+function updateWeeklyStats(type, amount=1){
+  const weekKey=`week_${getWeekStart()}`;
+  const data=JSON.parse(localStorage.getItem(weekKey)||"{}");
+  data[type]=(data[type]||0)+amount;
+  localStorage.setItem(weekKey,JSON.stringify(data));
+}
+// ═══════════════════════════════════════════════════════════════
+// QUIZ ENGINE v3 — Метод 5 касаний + Интервальное повторение
+// Касание 1: Видишь (карточка)
+// Касание 2: Слышишь (listen → выбор)
+// Касание 3: Пишешь (type)
+// Касание 4: Говоришь (shadowing mic)
+// Касание 5: Контекст (wordbank / составь фразу)
+// + Анти-угадывание: неправильные ответы возвращаются
+// ═══════════════════════════════════════════════════════════════
+
+function shuffle(arr){return [...arr].sort(()=>Math.random()-0.5);}
+
+// ── Интервальное повторение ───────────────────────────────────
+const SRS_KEY = "toothtalk_srs_v1";
+function loadSRS(){
+  try{ return JSON.parse(localStorage.getItem(SRS_KEY)||"{}"); }catch{ return {}; }
+}
+function saveSRS(data){ try{ localStorage.setItem(SRS_KEY,JSON.stringify(data)); }catch{} }
+function getSRSWords(){
+  const srs=loadSRS();
+  const now=Date.now();
+  return Object.entries(srs)
+    .filter(([,v])=>v.nextReview&&v.nextReview<=now)
+    .map(([word,v])=>({word,...v}));
+}
+function updateSRS(word, correct){
+  const srs=loadSRS();
+  const entry=srs[word]||{level:0,nextReview:0};
+  if(correct){
+    const delays=[1,3,7,14,30]; // дни
+    const newLevel=Math.min(entry.level+1,delays.length-1);
+    entry.level=newLevel;
+    entry.nextReview=Date.now()+delays[newLevel]*86400000;
+  } else {
+    entry.level=0;
+    entry.nextReview=Date.now()+86400000; // через день
+  }
+  srs[word]=entry;
+  saveSRS(srs);
+}
+
+// ── Строим 5 касаний для каждого слова ──────────────────────
+function build5Touches(cards){
+  if(!cards||cards.length===0)return[];
+  const pool=cards.map(c=>c.t);
+  const poolEN=cards.map(c=>c.w);
+  const quizzes=[];
+
+  cards.forEach((card,i)=>{
+    const wrongRU=shuffle(pool.filter(t=>t!==card.t)).slice(0,3);
+    const wrongEN=shuffle(poolEN.filter(w=>w!==card.w)).slice(0,3);
+
+    // Касание 2 — Слышишь → выбираешь
+    quizzes.push({
+      touch:2,
+      type:"listen",
+      word:card.w,
+      p:"👂 Послушай и выбери что услышал:",
+      a:card.w,
+      o:shuffle([card.w,...wrongEN.slice(0,3)])
+    });
+
+    // Касание 3 — Пишешь по-английски
+    quizzes.push({
+      touch:3,
+      type:"type",
+      p:`✍️ Напиши по-английски: "${card.t}"`,
+      a:card.w.toLowerCase(),
+      alts:[card.w.toLowerCase().replace(/[.,!?]/g,"")]
+    });
+
+    // Касание 4 — Говоришь (shadowing)
+    quizzes.push({
+      touch:4,
+      type:"shadow",
+      p:`🗣 Повтори вслух: "${card.w}"`,
+      word:card.w,
+      translation:card.t,
+      example:card.e,
+      a:card.w.toLowerCase()
+    });
+
+    // Касание 5 — Контекст (составь фразу или выбери перевод)
+    const words=card.w.split(" ");
+    if(words.length>=2){
+      const extra=shuffle(cards.filter(c=>c.w!==card.w)
+        .flatMap(c=>c.w.split(" "))
+        .filter(w=>!words.includes(w))).slice(0,2);
       quizzes.push({
+        touch:5,
+        type:"wordbank",
+        p:`🧩 Составь фразу: "${card.t}"`,
+        a:card.w,
+        extra
+      });
+    } else {
+      quizzes.push({
+        touch:5,
         type:"mcq",
-        p:`Как сказать по-английски: "${card.t}"?`,
-        a: card.w,
-        o: shuffle([card.w, ...wrongEN.slice(0,3)])
+        p:`💬 Что значит "${card.w}" в контексте: "${card.e}"?`,
+        a:card.t,
+        o:shuffle([card.t,...wrongRU.slice(0,3)])
       });
-    }
-    // Тип 2: MCQ — видишь EN → выбираешь RU
-    else if(i % 4 === 1){
-      quizzes.push({
-        type:"translate",
-        prompt: card.w,
-        p:`Переведи: "${card.w}"`,
-        a: card.t,
-        o: shuffle([card.t, ...wrongRU.slice(0,3)])
-      });
-    }
-    // Тип 3: Listen → выбираешь слово
-    else if(i % 4 === 2){
-      quizzes.push({
-        type:"listen",
-        word: card.w,
-        p:"Послушай и выбери слово:",
-        a: card.w,
-        o: shuffle([card.w, ...wrongEN.slice(0,3)])
-      });
-    }
-    // Тип 4: Wordbank или Type — составь/напиши
-    else {
-      // Для коротких слов (1 слово) — type
-      if(card.w.split(" ").length <= 2){
-        quizzes.push({
-          type:"type",
-          p:`Напиши по-английски: "${card.t}"`,
-          a: card.w.toLowerCase(),
-          alts: [card.w.toLowerCase()]
-        });
-      } else {
-        // Для фраз — wordbank
-        const words = card.w.split(" ");
-        const extraWords = getWrongOptions(card.w, pool, "w")
-          .join(" ").split(" ")
-          .filter(w => !words.includes(w))
-          .slice(0,3);
-        quizzes.push({
-          type:"wordbank",
-          p:`Составь фразу: "${card.t}"`,
-          a: card.w,
-          extra: extraWords,
-          o: []
-        });
-      }
     }
   });
 
-  // Всегда добавляем финальный MCQ на ключевое слово (new:true)
-  const keyCard = cards.find(c=>c.new) || cards[0];
+  // Финальный вопрос — главное слово
+  const keyCard=cards.find(c=>c.new)||cards[0];
   if(keyCard){
+    const wrongFinal=shuffle(pool.filter(t=>t!==keyCard.t)).slice(0,3);
     quizzes.push({
+      touch:5,
       type:"mcq",
-      p:`Главное слово урока — что значит "${keyCard.w}"?`,
-      a: keyCard.t,
-      o: shuffle([keyCard.t, ...getWrongOptions(keyCard.t, pool, "t")])
+      p:`⭐ Главное слово урока: "${keyCard.w}" — это?`,
+      a:keyCard.t,
+      o:shuffle([keyCard.t,...wrongFinal])
     });
   }
-
   return quizzes;
 }
-// ═══════════════════════════════════════════════════════════════
-// НОВЫЙ ДВИЖОК ЗАДАНИЙ — 5 типов как в Duolingo
-// ═══════════════════════════════════════════════════════════════
 
-// Типы заданий:
-// mcq      — выбор из вариантов
-// listen   — слушаешь → выбираешь
-// translate — видишь слово → набираешь перевод (кнопки-плитки)
-// wordbank  — составляешь фразу из слов-плиток
-// type     — свободный ввод
+// ── Shadowing component ──────────────────────────────────────
+function ShadowingTask({q, onResult}){
+  const {listening,transcript,start,reset}=useSpeechRecognition();
+  const [done,setDone]=useState(false);
+  const [score,setScore]=useState(0);
 
-function QuizEngine({quizzes, lesson, hearts, onLoseHeart, onComplete, onAddMistake, onExit}){
-  const [step, setStep] = useState(0);
-  const [sel, setSel] = useState(null);
-  const [typed, setTyped] = useState("");
-  const [wordOrder, setWordOrder] = useState([]);
-  const [confirmed, setConfirmed] = useState(false);
-  const [localH, setLocalH] = useState(hearts);
-  const [xp, setXp] = useState(0);
-  const [xpPop, setXpPop] = useState(0);
-  const [shake, setShake] = useState(false);
-  const [mood, setMood] = useState("happy");
-  const [done, setDone] = useState(false);
-  const [showConfetti, setShowConfetti] = useState(false);
-  const [streak, setStreak] = useState(0); // consecutive correct
+  function handleSpeak(){reset();start();}
 
-  const q = quizzes[step];
-  const totalSteps = quizzes.length;
-
-  // shuffle wordbank on mount
   useEffect(()=>{
-    if(q?.type==="wordbank"){
-      const words = q.a.split(" ");
-      const extra = q.extra||[];
-      const all = [...words, ...extra].sort(()=>Math.random()-0.5);
-      setWordOrder({available:all, chosen:[]});
+    if(!listening&&transcript){
+      const t=transcript.toLowerCase();
+      const target=q.word.toLowerCase();
+      // Подсчёт совпадения слов
+      const targetWords=target.split(" ");
+      const matches=targetWords.filter(w=>t.includes(w)).length;
+      const s=matches/targetWords.length;
+      setScore(s);
+      setDone(true);
     }
-    if(q?.type==="listen") speak(q.word||q.a, 0.75);
-  }, [step]);
+  },[listening]);
+
+  if(done){
+    const good=score>=0.6;
+    return(
+      <div style={{display:"flex",flexDirection:"column",gap:12}}>
+        <div style={{background:good?"#D1FAE5":"#FEF3C7",borderRadius:14,padding:"14px",border:`2px solid ${good?"#10B981":"#F59E0B"}`}}>
+          <div style={{fontWeight:800,fontSize:16,color:good?"#065F46":"#92400E",marginBottom:4}}>
+            {good?"🎤 Отлично!":"🎤 Попробуй ещё"}
+          </div>
+          <div style={{fontSize:13,color:"#64748B"}}>Ты сказал: "{transcript}"</div>
+          <div style={{fontSize:13,color:"#065F46",marginTop:4}}>Правильно: "{q.word}"</div>
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <SpeakBtn text={q.word} size={36}/>
+          <button onClick={()=>onResult(good)} style={{flex:1,background:good?"#10B981":"#F59E0B",color:"#fff",border:"none",borderRadius:12,padding:"12px",fontWeight:700,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>
+            Далее →
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:12}}>
+      <div style={{background:"#F0F9FF",borderRadius:14,padding:"16px",border:"2px solid #BAE6FD"}}>
+        <div style={{fontSize:18,fontWeight:900,color:"#0EA5E9",marginBottom:4}}>{q.word}</div>
+        <div style={{fontSize:13,color:"#64748B",marginBottom:4}}>{q.translation}</div>
+        <div style={{fontSize:12,color:"#94A3B8",fontStyle:"italic"}}>"{q.example}"</div>
+      </div>
+      <div style={{display:"flex",gap:8}}>
+        <SpeakBtn text={q.word} size={40}/>
+        <button onClick={handleSpeak} style={{flex:1,background:listening?"#EF4444":"#8B5CF6",color:"#fff",border:"none",borderRadius:12,padding:"12px",fontWeight:700,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>
+          {listening?"⏹ Стоп...":"🎤 Говори!"}
+        </button>
+      </div>
+      {listening&&<div style={{textAlign:"center",color:"#8B5CF6",fontSize:12,animation:"pulse 1s infinite"}}>
+        🎙 Слушаю...
+      </div>}
+      <button onClick={()=>onResult(true)} style={{background:"none",border:"none",color:"#94A3B8",fontSize:12,cursor:"pointer",padding:"4px"}}>
+        Пропустить →
+      </button>
+    </div>
+  );
+}
+
+// ── Главный QuizEngine ───────────────────────────────────────
+function QuizEngine({quizzes:rawQuizzes, cards, lesson, hearts, onLoseHeart, onComplete, onAddMistake, onExit}){
+  const quizzes=build5Touches(cards&&cards.length>0?cards:(rawQuizzes||[]).map(q=>({w:q.a,t:q.p,e:q.a,i:"🦷",new:false})));
+
+  const [step,setStep]=useState(0);
+  const [sel,setSel]=useState(null);
+  const [typed,setTyped]=useState("");
+  const [wordOrder,setWordOrder]=useState({available:[],chosen:[]});
+  const [confirmed,setConfirmed]=useState(false);
+  const [localH,setLocalH]=useState(hearts);
+  const [xp,setXp]=useState(0);
+  const [xpPop,setXpPop]=useState(0);
+  const [shake,setShake]=useState(false);
+  const [mood,setMood]=useState("happy");
+  const [done,setDone]=useState(false);
+  const [showConfetti,setShowConfetti]=useState(false);
+  const [streak,setStreak]=useState(0);
+  const [mistakes,setMistakes]=useState([]); // слова для повторения
+
+  const q=quizzes[step]||{};
+
+  useEffect(()=>{
+    if(q.type==="listen"&&q.word) setTimeout(()=>speak(q.word,0.8),300);
+    if(q.type==="wordbank"&&q.a){
+      const words=q.a.split(" ");
+      const extra=q.extra||[];
+      setWordOrder({available:shuffle([...words,...extra]),chosen:[]});
+    }
+    setSel(null);setTyped("");setConfirmed(false);
+  },[step]);
 
   function getAnswer(){
     if(q.type==="mcq"||q.type==="listen") return sel;
-    if(q.type==="translate"||q.type==="type") return typed.trim().toLowerCase();
-    if(q.type==="wordbank") return wordOrder.chosen?.join(" ")||"";
+    if(q.type==="translate") return sel;
+    if(q.type==="type") return typed.trim().toLowerCase();
+    if(q.type==="wordbank") return wordOrder.chosen.join(" ");
     return sel;
   }
 
   function checkCorrect(answer){
-    const correct = q.a.trim().toLowerCase();
-    if(q.type==="translate"||q.type==="type"){
-      // allow minor typos — 80% match
-      if(answer===correct) return true;
-      const alts = q.alts||[];
-      if(alts.some(a=>answer===a.toLowerCase())) return true;
-      return false;
+    if(!answer) return false;
+    const correct=(q.a||"").trim().toLowerCase();
+    const ans=answer.trim().toLowerCase();
+    if(ans===correct) return true;
+    if(q.alts&&q.alts.some(a=>ans===a.toLowerCase())) return true;
+    if(q.type==="type"){
+      let diff=0;
+      if(Math.abs(ans.length-correct.length)<=1){
+        for(let i=0;i<Math.max(ans.length,correct.length);i++) if(ans[i]!==correct[i]) diff++;
+        if(diff<=1) return true;
+      }
     }
-    return answer===correct||answer===q.a;
+    return false;
   }
 
   function confirm(){
-    const answer = getAnswer();
-    if(!answer||(q.type==="wordbank"&&wordOrder.chosen?.length===0)) return;
+    const answer=getAnswer();
+    if(!answer&&q.type!=="wordbank") return;
+    if(q.type==="wordbank"&&wordOrder.chosen.length===0) return;
     setConfirmed(true);
-    const correct = checkCorrect(answer);
-    const earned = Math.round(lesson.xp/Math.max(1,totalSteps));
+    const correct=checkCorrect(answer);
+    const earned=Math.max(5,Math.round((lesson.xp||20)/Math.max(1,quizzes.length)));
     if(correct){
-      setMood("excited");
-      setXp(x=>x+earned);
-      setXpPop(earned);
+      setMood("excited");setXp(x=>x+earned);setXpPop(earned);
       setStreak(s=>s+1);
       playSound(streak>=2?"complete":"correct");
       haptic("success");
-      if(q.type!=="listen") speak(q.a, 0.85);
+      if(q.word) updateSRS(q.word,true);
+      if(q.type!=="listen") speak(q.a,0.85);
     } else {
-      setMood("wrong");
-      setLocalH(h=>Math.max(0,h-1));
-      onLoseHeart();
-      setShake(true); setTimeout(()=>setShake(false),500);
-      playSound("wrong"); haptic("error");
-      setStreak(0);
-      speak(q.a, 0.8);
-      onAddMistake({wrong:answer, correct:q.a, lesson:lesson.title});
+      setMood("wrong");setLocalH(h=>Math.max(0,h-1));onLoseHeart();
+      setShake(true);setTimeout(()=>setShake(false),500);
+      playSound("wrong");haptic("error");setStreak(0);
+      if(q.word) updateSRS(q.word,false);
+      speak(q.a,0.8);
+      onAddMistake({wrong:answer||"—",correct:q.a,lesson:lesson.title});
+      setMistakes(m=>[...m,q.a]);
     }
   }
 
   function next(){
     if(localH===0){onExit();return;}
-    if(step+1>=totalSteps){
-      playSound("complete"); haptic("heavy");
-      setShowConfetti(true); setDone(true);
+    if(step+1>=quizzes.length){
+      playSound("complete");haptic("heavy");
+      setShowConfetti(true);setDone(true);
     } else {
-      setStep(s=>s+1);
-      setSel(null); setTyped(""); setWordOrder([]);
-      setConfirmed(false); setMood("thinking");
+      setStep(s=>s+1);setMood("thinking");
     }
   }
 
-  const isCorrect = confirmed && checkCorrect(getAnswer());
+  function handleShadowResult(good){
+    const earned=Math.max(3,Math.round((lesson.xp||20)/Math.max(1,quizzes.length)));
+    if(good){setMood("excited");setXp(x=>x+earned);setXpPop(earned);playSound("correct");haptic("success");}
+    next();
+  }
 
-  if(done) return(
+  const isCorrect=confirmed&&checkCorrect(getAnswer());
+
+  // Метки касаний
+  const touchLabels={
+    1:"👁 ВИДИШЬ",2:"👂 СЛЫШИШЬ",3:"✍️ ПИШЕШЬ",4:"🗣 ГОВОРИШЬ",5:"💬 КОНТЕКСТ"
+  };
+  const touchColors={1:"#06B6D4",2:"#8B5CF6",3:"#F59E0B",4:"#EF4444",5:"#10B981"};
+
+  if(done)return(
     <div style={{minHeight:"100vh",background:"linear-gradient(160deg,#065F46,#10B981)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:28,fontFamily:"inherit",textAlign:"center"}}>
       {showConfetti&&<Confetti/>}
       <div style={{display:"flex",gap:6,alignItems:"flex-end",marginBottom:12}}>
@@ -482,11 +718,20 @@ function QuizEngine({quizzes, lesson, hearts, onLoseHeart, onComplete, onAddMist
       </div>
       <div style={{background:"#fff",borderRadius:24,padding:"26px 22px",maxWidth:340,width:"100%"}}>
         <div style={{fontSize:24,fontWeight:900,color:"#10B981",marginBottom:4}}>🎉 Урок пройден!</div>
-        <div style={{color:"#64748B",fontSize:13,marginBottom:18}}>{lesson.icon} {lesson.title}</div>
-        <div style={{display:"flex",justifyContent:"center",gap:24,marginBottom:22}}>
-          <div><div style={{fontSize:24,fontWeight:800,color:"#10B981"}}>+{xp}</div><div style={{fontSize:12,color:"#94A3B8"}}>XP</div></div>
-          <div><div style={{fontSize:20,fontWeight:800,color:"#EF4444"}}>{"❤️".repeat(Math.max(0,localH))||"💔"}</div><div style={{fontSize:12,color:"#94A3B8"}}>жизней</div></div>
+        <div style={{color:"#64748B",fontSize:13,marginBottom:6}}>{lesson.icon} {lesson.title}</div>
+        <div style={{fontSize:12,color:"#94A3B8",marginBottom:16}}>
+          5 касаний для каждого слова ✓
         </div>
+        <div style={{display:"flex",justifyContent:"center",gap:24,marginBottom:20}}>
+          <div><div style={{fontSize:24,fontWeight:800,color:"#10B981"}}>+{xp}</div><div style={{fontSize:12,color:"#94A3B8"}}>XP</div></div>
+          <div><div style={{fontSize:20,fontWeight:800}}>{[...Array(Math.max(0,localH))].map((_,i)=><span key={i}>❤️</span>)}</div><div style={{fontSize:12,color:"#94A3B8"}}>жизней</div></div>
+          {mistakes.length>0&&<div><div style={{fontSize:20,fontWeight:800,color:"#F59E0B"}}>{mistakes.length}</div><div style={{fontSize:12,color:"#94A3B8"}}>повторить</div></div>}
+        </div>
+        {mistakes.length>0&&(
+          <div style={{background:"#FEF3C7",borderRadius:12,padding:"10px",marginBottom:14,fontSize:12,color:"#92400E"}}>
+            ⏰ Эти слова вернутся завтра для повторения
+          </div>
+        )}
         <Btn onClick={()=>onComplete(xp)} color="#10B981">Продолжить!</Btn>
       </div>
     </div>
@@ -499,105 +744,92 @@ function QuizEngine({quizzes, lesson, hearts, onLoseHeart, onComplete, onAddMist
       {/* Header */}
       <div style={{background:"#1E293B",padding:"14px 18px",display:"flex",alignItems:"center",gap:12}}>
         <button onClick={onExit} style={{background:"none",border:"none",color:"#94A3B8",fontSize:20,cursor:"pointer"}}>✕</button>
-        <div style={{flex:1}}><Bar v={step} m={totalSteps} color="#0EA5E9"/></div>
+        <div style={{flex:1}}><Bar v={step} m={quizzes.length} color={touchColors[q.touch||1]||"#0EA5E9"}/></div>
         <div style={{display:"flex",gap:2}}>{[1,2,3].map(i=><span key={i} style={{fontSize:14,opacity:i<=localH?1:0.25}}>❤️</span>)}</div>
       </div>
 
-      {/* Character */}
-      <div style={{display:"flex",justifyContent:"center",padding:"10px 0 0"}}>
-        <DadChar mood={mood} size={76}/>
+      {/* Touch indicator */}
+      <div style={{background:touchColors[q.touch||1]||"#0EA5E9",padding:"6px 18px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div style={{color:"#fff",fontSize:11,fontWeight:800,letterSpacing:1}}>
+          {touchLabels[q.touch||1]} · {step+1}/{quizzes.length}
+        </div>
+        <div style={{display:"flex",gap:3}}>
+          {[1,2,3,4,5].map(t=>(
+            <div key={t} style={{width:16,height:4,borderRadius:99,background:t<=(q.touch||1)?"#fff":"rgba(255,255,255,0.3)"}}/>
+          ))}
+        </div>
       </div>
 
-      {/* Question area */}
-      <div style={{flex:1,padding:"10px 18px",display:"flex",flexDirection:"column",gap:12}}>
+      {/* Character */}
+      <div style={{display:"flex",justifyContent:"center",padding:"8px 0 0"}}>
+        <DadChar mood={mood} size={70}/>
+      </div>
 
-        {/* Task label */}
+      {/* Question */}
+      <div style={{flex:1,padding:"8px 18px",display:"flex",flexDirection:"column",gap:10}}>
         <div style={{background:"#fff",borderRadius:16,padding:"14px 16px",boxShadow:"0 2px 8px rgba(0,0,0,0.05)"}}>
-          <div style={{fontSize:10,color:"#94A3B8",fontWeight:700,marginBottom:4,letterSpacing:1}}>
-            {q.type==="listen"?"🔊 ПОСЛУШАЙ И ВЫБЕРИ":
-             q.type==="translate"?"🔤 ВЫБЕРИ ПЕРЕВОД":
-             q.type==="wordbank"?"🧩 СОСТАВЬ ФРАЗУ":
-             q.type==="type"?"⌨️ НАПИШИ ПО-АНГЛИЙСКИ":
-             "✅ ВЫБЕРИ ПРАВИЛЬНЫЙ ОТВЕТ"} · {step+1}/{totalSteps}
-          </div>
-          <div style={{fontSize:15,fontWeight:700,color:"#1E293B",lineHeight:1.5}}>
-            {q.type==="listen"
-              ? <div style={{display:"flex",alignItems:"center",gap:10}}>
-                  <button onClick={()=>speak(q.word||q.a,0.75)} style={{background:"#DBEAFE",border:"none",borderRadius:50,width:52,height:52,fontSize:24,cursor:"pointer",flexShrink:0}}>🔊</button>
-                  <span style={{color:"#64748B",fontSize:13}}>Нажми и послушай — что это?</span>
-                </div>
-              : q.p||q.t||q.prompt}
-          </div>
+          {q.type==="listen"
+            ?<button onClick={()=>speak(q.word,0.75)} style={{background:"#EDE9FE",border:"none",borderRadius:14,padding:"12px 18px",fontSize:15,cursor:"pointer",display:"flex",alignItems:"center",gap:10,width:"100%"}}>
+              <span style={{fontSize:26}}>🔊</span>
+              <span style={{color:"#5B21B6",fontWeight:700}}>Нажми и послушай</span>
+            </button>
+            :<div style={{fontSize:15,fontWeight:700,color:"#1E293B",lineHeight:1.5}}>{q.p}</div>}
         </div>
 
-        {/* MCQ / Listen */}
+        {/* Shadow task */}
+        {q.type==="shadow"&&<ShadowingTask q={q} onResult={handleShadowResult}/>}
+
+        {/* MCQ */}
         {(q.type==="mcq"||q.type==="listen")&&(
           <div style={{display:"flex",flexDirection:"column",gap:8}}>
-            {q.o.map(opt=>{
-              const isC=opt===q.a;
-              const isSel=sel===opt;
+            {(q.o||[]).map(opt=>{
+              const isC=opt===q.a,isSel=sel===opt;
               let bg="#fff",border="2px solid #E2E8F0",col="#1E293B",emoji="";
               if(confirmed&&isC){bg="#D1FAE5";border="2px solid #10B981";col="#065F46";emoji=" ✅";}
               else if(isSel&&confirmed&&!isC){bg="#FEE2E2";border="2px solid #EF4444";col="#991B1B";emoji=" ❌";}
               else if(isSel&&!confirmed){bg="#DBEAFE";border="2px solid #3B82F6";col="#1D4ED8";}
-              return(
-                <button key={opt} onClick={()=>{if(!confirmed){setSel(opt);haptic("select");playSound("flip");}}}
-                  style={{background:bg,border,color:col,borderRadius:13,padding:"13px 14px",fontSize:14,fontWeight:500,textAlign:"left",cursor:confirmed?"default":"pointer",fontFamily:"inherit",lineHeight:1.4,transition:"all 0.15s"}}>
-                  {opt}{emoji}
-                </button>
-              );
+              return <button key={opt} onClick={()=>{if(!confirmed){setSel(opt);haptic("select");playSound("flip");}}}
+                style={{background:bg,border,color:col,borderRadius:13,padding:"12px 14px",fontSize:14,fontWeight:500,textAlign:"left",cursor:confirmed?"default":"pointer",fontFamily:"inherit",transition:"all 0.15s"}}>
+                {opt}{emoji}
+              </button>;
             })}
           </div>
         )}
 
-        {/* Translate — tap tiles */}
+        {/* Translate плитки */}
         {q.type==="translate"&&(
-          <div>
-            <div style={{fontSize:12,color:"#64748B",marginBottom:8}}>Нажми на правильный перевод:</div>
-            <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
-              {q.o.map(opt=>{
-                const isC=opt===q.a;
-                const isSel=sel===opt;
-                let bg="#fff",border="2px solid #E2E8F0",col="#1E293B";
-                if(confirmed&&isC){bg="#D1FAE5";border="2px solid #10B981";col="#065F46";}
-                else if(isSel&&confirmed&&!isC){bg="#FEE2E2";border="2px solid #EF4444";col="#991B1B";}
-                else if(isSel&&!confirmed){bg="#DBEAFE";border="2px solid #3B82F6";col="#1D4ED8";}
-                return(
-                  <button key={opt} onClick={()=>{if(!confirmed){setSel(opt);haptic("select");speak(opt,0.9);}}}
-                    style={{background:bg,border,color:col,borderRadius:20,padding:"9px 16px",fontSize:14,fontWeight:600,cursor:confirmed?"default":"pointer",fontFamily:"inherit",boxShadow:"0 2px 4px rgba(0,0,0,0.06)",transition:"all 0.15s"}}>
-                    {opt}
-                  </button>
-                );
-              })}
-            </div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+            {(q.o||[]).map(opt=>{
+              const isC=opt===q.a,isSel=sel===opt;
+              let bg="#fff",border="2px solid #E2E8F0",col="#1E293B";
+              if(confirmed&&isC){bg="#D1FAE5";border="2px solid #10B981";col="#065F46";}
+              else if(isSel&&confirmed&&!isC){bg="#FEE2E2";border="2px solid #EF4444";col="#991B1B";}
+              else if(isSel&&!confirmed){bg="#DBEAFE";border="2px solid #3B82F6";col="#1D4ED8";}
+              return <button key={opt} onClick={()=>{if(!confirmed){setSel(opt);haptic("select");speak(opt,0.9);}}}
+                style={{background:bg,border,color:col,borderRadius:20,padding:"10px 18px",fontSize:14,fontWeight:600,cursor:confirmed?"default":"pointer",fontFamily:"inherit",boxShadow:"0 2px 4px rgba(0,0,0,0.06)"}}>
+                {opt}
+              </button>;
+            })}
           </div>
         )}
 
-        {/* Word Bank — drag tiles to build phrase */}
-        {q.type==="wordbank"&&wordOrder.chosen!==undefined&&(
+        {/* Wordbank */}
+        {q.type==="wordbank"&&(
           <div>
-            {/* Answer area */}
-            <div style={{minHeight:52,background:"#fff",borderRadius:14,border:"2px dashed #CBD5E1",padding:"10px 12px",marginBottom:12,display:"flex",flexWrap:"wrap",gap:6,alignItems:"center"}}>
-              {wordOrder.chosen?.length===0
-                ? <span style={{color:"#CBD5E1",fontSize:13}}>Нажми слова снизу ↓</span>
-                : wordOrder.chosen.map((w,i)=>(
-                  <button key={i} onClick={()=>{
-                    if(confirmed)return;
-                    haptic("select");
-                    setWordOrder(prev=>({available:[...prev.available,w],chosen:prev.chosen.filter((_,j)=>j!==i)}));
-                  }} style={{background:"#0EA5E9",color:"#fff",border:"none",borderRadius:12,padding:"7px 12px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+            <div style={{minHeight:50,background:"#fff",borderRadius:14,border:"2px dashed #CBD5E1",padding:"10px 12px",marginBottom:10,display:"flex",flexWrap:"wrap",gap:6,alignItems:"center"}}>
+              {wordOrder.chosen.length===0
+                ?<span style={{color:"#CBD5E1",fontSize:13}}>Нажми слова снизу ↓</span>
+                :wordOrder.chosen.map((w,i)=>(
+                  <button key={i} onClick={()=>{if(confirmed)return;haptic("select");setWordOrder(p=>({available:[...p.available,w],chosen:p.chosen.filter((_,j)=>j!==i)}));}}
+                    style={{background:"#0EA5E9",color:"#fff",border:"none",borderRadius:12,padding:"6px 12px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
                     {w}
                   </button>
                 ))}
             </div>
-            {/* Available words */}
             <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
-              {wordOrder.available?.map((w,i)=>(
-                <button key={i} onClick={()=>{
-                  if(confirmed)return;
-                  haptic("select"); speak(w,1.0);
-                  setWordOrder(prev=>({available:prev.available.filter((_,j)=>j!==i),chosen:[...prev.chosen,w]}));
-                }} style={{background:"#fff",border:"2px solid #E2E8F0",color:"#1E293B",borderRadius:12,padding:"7px 12px",fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"inherit",boxShadow:"0 2px 4px rgba(0,0,0,0.05)"}}>
+              {wordOrder.available.map((w,i)=>(
+                <button key={i} onClick={()=>{if(confirmed)return;haptic("select");speak(w,1.0);setWordOrder(p=>({available:p.available.filter((_,j)=>j!==i),chosen:[...p.chosen,w]}));}}
+                  style={{background:"#fff",border:"2px solid #E2E8F0",color:"#1E293B",borderRadius:12,padding:"7px 12px",fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"inherit",boxShadow:"0 2px 4px rgba(0,0,0,0.05)"}}>
                   {w}
                 </button>
               ))}
@@ -605,20 +837,16 @@ function QuizEngine({quizzes, lesson, hearts, onLoseHeart, onComplete, onAddMist
           </div>
         )}
 
-        {/* Type — free input */}
+        {/* Type */}
         {q.type==="type"&&(
           <div>
-            <div style={{fontSize:12,color:"#64748B",marginBottom:8}}>Напиши по-английски:</div>
-            <input
-              value={typed}
-              onChange={e=>setTyped(e.target.value)}
+            <input value={typed} onChange={e=>setTyped(e.target.value)}
               onKeyDown={e=>e.key==="Enter"&&!confirmed&&confirm()}
-              disabled={confirmed}
-              placeholder="Введи ответ..."
+              disabled={confirmed} placeholder="Напиши по-английски..." autoFocus
               style={{width:"100%",border:`2px solid ${confirmed?(isCorrect?"#10B981":"#EF4444"):"#CBD5E1"}`,borderRadius:14,padding:"14px 16px",fontSize:16,fontFamily:"inherit",background:confirmed?(isCorrect?"#D1FAE5":"#FEE2E2"):"#fff",color:"#1E293B",outline:"none",boxSizing:"border-box"}}
             />
             {confirmed&&!isCorrect&&(
-              <div style={{display:"flex",alignItems:"center",gap:8,marginTop:8}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginTop:8,background:"#D1FAE5",borderRadius:12,padding:"10px 14px"}}>
                 <div style={{fontSize:14,color:"#10B981",fontWeight:700}}>✓ {q.a}</div>
                 <SpeakBtn text={q.a} size={28}/>
               </div>
@@ -627,34 +855,36 @@ function QuizEngine({quizzes, lesson, hearts, onLoseHeart, onComplete, onAddMist
         )}
       </div>
 
-      {/* Bottom bar */}
-      <div style={{padding:"12px 18px",background:confirmed?(isCorrect?"#D1FAE5":"#FEE2E2"):"#fff",borderTop:"1px solid #E2E8F0"}}>
-        {!confirmed
-          ? <Btn onClick={confirm}
-              disabled={
-                (q.type==="mcq"||q.type==="listen"||q.type==="translate")&&!sel ||
-                q.type==="type"&&!typed.trim() ||
-                q.type==="wordbank"&&(!wordOrder.chosen||wordOrder.chosen.length===0)
-              }
-              color="#0EA5E9">
-              Проверить
-            </Btn>
-          : <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+      {/* Bottom bar — не показываем для shadow */}
+      {q.type!=="shadow"&&(
+        <div style={{padding:"12px 18px",background:confirmed?(isCorrect?"#D1FAE5":"#FEE2E2"):"#fff",borderTop:"1px solid #E2E8F0"}}>
+          {!confirmed
+            ?<Btn onClick={confirm}
+                disabled={
+                  (q.type==="mcq"||q.type==="listen"||q.type==="translate")&&!sel ||
+                  q.type==="type"&&!typed.trim() ||
+                  q.type==="wordbank"&&wordOrder.chosen.length===0
+                }
+                color={touchColors[q.touch||1]||"#0EA5E9"}>
+                Проверить
+              </Btn>
+            :<div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
               <div>
                 <div style={{fontWeight:800,fontSize:18,color:isCorrect?"#065F46":"#991B1B"}}>{isCorrect?"🔥 Верно!":"💔 Неверно"}</div>
                 {!isCorrect&&q.type!=="type"&&(
                   <div style={{display:"flex",alignItems:"center",gap:6,marginTop:2}}>
-                    <div style={{fontSize:12,color:"#64748B",maxWidth:210}}>→ {q.a}</div>
-                    <SpeakBtn text={q.a} size={26}/>
+                    <div style={{fontSize:12,color:"#64748B",maxWidth:200}}>→ {q.a}</div>
+                    <SpeakBtn text={q.a} size={24}/>
                   </div>
                 )}
               </div>
-              <button onClick={next} style={{background:isCorrect?"#10B981":"#EF4444",color:"#fff",border:"none",borderRadius:12,padding:"9px 20px",fontWeight:700,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>
+              <button onClick={next} style={{background:isCorrect?"#10B981":"#EF4444",color:"#fff",border:"none",borderRadius:12,padding:"10px 22px",fontWeight:700,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>
                 Далее →
               </button>
             </div>}
-      </div>
-      <style>{`@keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-8px)}75%{transform:translateX(8px)}}`}</style>
+        </div>
+      )}
+      <style>{`@keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-8px)}75%{transform:translateX(8px)}}@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}`}</style>
     </div>
   );
 }
@@ -2019,7 +2249,7 @@ function ClickableText({text, style={}}){
 }
 
 // ── HOME ──────────────────────────────────────────────────────
-function Home({state,onLesson,onDialogue,onMistakes,onProgress,onReset}){
+function Home({state,onLesson,onDialogue,onMistakes,onProgress,onReset,onReview}){
   const {completedLessons,completedDialogues,mistakeBank,totalXP,streak,hearts}=state;
   const done=completedLessons.length;
   const next=ALL_LESSONS.find(l=>!completedLessons.includes(l.id));
@@ -2027,16 +2257,35 @@ function Home({state,onLesson,onDialogue,onMistakes,onProgress,onReset}){
   const [openUnits,setOpenUnits]=useState({"u1":true});
   function toggleUnit(id){setOpenUnits(o=>({...o,[id]:!o[id]}));}
 
+  const srsWords=getSRSWords();
+  const hasSRS=srsWords.length>0;
+
   return(
     <div style={{minHeight:"100vh",background:"#F0F9FF",fontFamily:"inherit"}}>
+      {newAchievement&&<AchievementToast achievement={newAchievement} onDone={()=>setNewAchievement(null)}/>}
       <div style={{background:"linear-gradient(135deg,#0F172A,#1E3A5F)",padding:"18px 18px 0",color:"#fff"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
           <div>
             <div style={{fontSize:10,color:"#64748B",fontWeight:700,letterSpacing:1}}>TOOTHTALK</div>
             <div style={{fontSize:18,fontWeight:800}}>🦷 {state.specialization==="assistant"?"Ассистент":state.specialization==="admin"?"Администратор":state.specialization==="therapist"?"Терапевт":state.specialization==="ortho"?"Ортодонт":state.specialization==="pediatric"?"Детский стоматолог":"Хирург-ортопед"}</div>
           </div>
-          <button onClick={onProgress} style={{background:"rgba(255,255,255,0.1)",border:"none",borderRadius:10,padding:"7px 12px",color:"#fff",fontWeight:700,fontSize:12,cursor:"pointer"}}>📊</button>
+          <div style={{display:"flex",gap:6}}>
+            <button onClick={()=>go("achievements")} style={{background:"rgba(255,255,255,0.1)",border:"none",borderRadius:10,padding:"7px 12px",color:"#fff",fontWeight:700,fontSize:12,cursor:"pointer"}}>🏆</button>
+            <button onClick={onProgress} style={{background:"rgba(255,255,255,0.1)",border:"none",borderRadius:10,padding:"7px 12px",color:"#fff",fontWeight:700,fontSize:12,cursor:"pointer"}}>📊</button>
+          </div>
         </div>
+        {hasSRS&&(
+          <div style={{background:"#F59E0B",borderRadius:12,padding:"10px 14px",marginBottom:10,display:"flex",alignItems:"center",gap:8}}>
+            <span style={{fontSize:20}}>⏰</span>
+            <div style={{flex:1}}>
+              <div style={{color:"#fff",fontWeight:800,fontSize:13}}>{srsWords.length} слов для повторения!</div>
+              <div style={{color:"rgba(255,255,255,0.8)",fontSize:11}}>Интервальное повторение — закрепи знания</div>
+            </div>
+            <button onClick={()=>onReview(srsWords)} style={{background:"#fff",border:"none",borderRadius:8,padding:"6px 12px",fontWeight:700,fontSize:12,color:"#92400E",cursor:"pointer"}}>
+              Повторить
+            </button>
+          </div>
+        )}
         <div style={{display:"flex",alignItems:"flex-end",gap:4,marginBottom:10}}>
           <DadChar mood="happy" size={48}/><MomChar mood="happy" size={42}/><Girl4 size={28}/><Baby1 size={24}/>
           <div style={{marginLeft:6,flex:1}}>
@@ -2065,6 +2314,7 @@ function Home({state,onLesson,onDialogue,onMistakes,onProgress,onReset}){
       <div style={{padding:"14px 14px 100px"}}>
         {/* LESSONS TAB */}
         {tab==="lessons"&&<>
+          <WeeklyGoals state={state}/>
           {next&&(
             <div style={{marginBottom:14}}>
               <div style={{fontSize:11,fontWeight:700,color:"#64748B",marginBottom:6}}>СЛЕДУЮЩИЙ УРОК</div>
@@ -2369,16 +2619,9 @@ function LessonScreen({lesson,hearts,onLoseHeart,onComplete,onExit,onAddMistake}
 
   // Quiz phase → use QuizEngine
   if(phase==="quiz"){
-    // Build rich quizzes from cards if existing quizzes are too simple
-    const richQuizzes = quizzes.length > 0 ? quizzes : cards.map((card,i)=>({
-      type: i%2===0 ? "mcq" : "translate",
-      p: i%2===0 ? `Что значит "${card.w}"?` : `Переведи: "${card.w}"`,
-      prompt: card.w,
-      a: i%2===0 ? card.t : card.t,
-      o: [card.t, "зуб", "боль", "рот"].filter((v,idx,arr)=>arr.indexOf(v)===idx).slice(0,4)
-    }));
     return <QuizEngine
-      quizzes={richQuizzes}
+      quizzes={quizzes}
+      cards={cards}
       lesson={lesson}
       hearts={hearts}
       onLoseHeart={onLoseHeart}
@@ -2510,6 +2753,8 @@ export default function App(){
   const [activeDialogue,setActiveDialogue]=useState(null);
   const [testCorrect,setTestCorrect]=useState(0);
   const [mistakeDrill,setMistakeDrill]=useState(false);
+  const [srsReview,setSrsReview]=useState([]);
+  const [newAchievement,setNewAchievement]=useState(null);
   useEffect(()=>saveState(state),[state]);
 
   function go(screen){setState(s=>({...s,screen}));}
@@ -2555,6 +2800,7 @@ export default function App(){
     const unlocked=ALL_LESSONS.slice(0,startIdx).map(l=>l.id);
     setState(s=>({...s,completedLessons:unlocked,screen:"home"}));
   }}/>;
+  if(state.screen==="achievements")return <AchievementsScreen state={state} onBack={()=>go("home")}/>;
   if(state.screen==="progress")return <ProgressScreen state={state} onBack={()=>go("home")} onChangeSpec={()=>go("specialization")}/>;
 
   if(state.screen==="lesson"&&activeLesson)return(
@@ -2563,10 +2809,16 @@ export default function App(){
       onAddMistake={addMistake}
       onComplete={xp=>{
         updateStreak();
-        setState(s=>({...s,
-          completedLessons:s.completedLessons.includes(activeLesson.id)?s.completedLessons:[...s.completedLessons,activeLesson.id],
-          totalXP:s.totalXP+xp,hearts:Math.min(3,s.hearts+1),screen:"home"
-        }));
+        updateWeeklyStats("lessons",1);
+        updateWeeklyStats("xp",xp);
+        const oldState=state;
+        const newState={...state,
+          completedLessons:state.completedLessons.includes(activeLesson.id)?state.completedLessons:[...state.completedLessons,activeLesson.id],
+          totalXP:state.totalXP+xp,hearts:Math.min(3,state.hearts+1),screen:"home"
+        };
+        setState(newState);
+        const newA=checkNewAchievements(oldState,newState);
+        if(newA.length>0) setNewAchievement(newA[0]);
         setActiveLesson(null);
       }}
       onExit={()=>{setActiveLesson(null);go("home");}}
@@ -2600,6 +2852,10 @@ export default function App(){
     onDialogue={d=>{setActiveDialogue(d);go("dialogue");}}
     onMistakes={()=>setMistakeDrill(true)}
     onProgress={()=>go("progress")}
+    onReview={words=>{setSrsReview(words);go("srsreview");}}
     onReset={()=>{const r={...DEFAULT};setState(r);saveState(r);setActiveLesson(null);setActiveDialogue(null);}}
   />;
 }
+
+// ── SRS REVIEW NOTIFICATION ──────────────────────────────────
+// Добавляется в Home — показывает слова для повторения
