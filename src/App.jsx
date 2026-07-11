@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 
 function DadChar({ mood = "happy", size = 120 }) {
   const mouths = {
@@ -462,25 +462,44 @@ function updateSRS(word, correct){
 }
 
 // ── Строим 5 касаний для каждого слова ──────────────────────
-function build5Touches(cards){
+// Добирает отвлекающие варианты из общего банка, чтобы всегда было нужное число (метод №1 Active Recall)
+function topUpDistractors(local, needed, globalPool, exclude){
+  const out=[...local];
+  if(out.length<needed){
+    const extra=shuffle(globalPool.filter(x=>x!==exclude&&!out.includes(x))).slice(0,needed-out.length);
+    out.push(...extra);
+  }
+  return out.slice(0,needed);
+}
+
+function build5Touches(cards, {canListen=true, canSpeak=true}={}){
   if(!cards||cards.length===0)return[];
   const pool=cards.map(c=>c.t);
   const poolEN=cards.map(c=>c.w);
+  // Общий банк слов со всех уроков — источник правдоподобных отвлекающих вариантов
+  const allRU=(typeof ALL_CARDS!=="undefined"?ALL_CARDS:cards).map(c=>c.t);
+  const allEN=(typeof ALL_CARDS!=="undefined"?ALL_CARDS:cards).map(c=>c.w);
   const quizzes=[];
 
   cards.forEach((card,i)=>{
-    const wrongRU=shuffle(pool.filter(t=>t!==card.t)).slice(0,3);
-    const wrongEN=shuffle(poolEN.filter(w=>w!==card.w)).slice(0,3);
+    // всегда 3 отвлекающих → 4 варианта: сперва из урока (близкие по теме), потом из общего банка
+    const wrongRU=topUpDistractors(shuffle(pool.filter(t=>t!==card.t)).slice(0,3),3,allRU,card.t);
+    const wrongEN=topUpDistractors(shuffle(poolEN.filter(w=>w!==card.w)).slice(0,3),3,allEN,card.w);
 
-    // Касание 2 — Слышишь → выбираешь
-    quizzes.push({
-      touch:2,
-      type:"listen",
-      word:card.w,
-      p:"👂 Послушай и выбери что услышал:",
-      a:card.w,
-      o:shuffle([card.w,...wrongEN.slice(0,3)])
-    });
+    // Касание 2 — Слышишь → выбираешь (в тихом режиме: читаешь → выбираешь перевод)
+    if(canListen){
+      quizzes.push({
+        touch:2, type:"listen", word:card.w,
+        p:"👂 Послушай и выбери что услышал:",
+        a:card.w, o:shuffle([card.w,...wrongEN.slice(0,3)])
+      });
+    } else {
+      quizzes.push({
+        touch:2, type:"mcq",
+        p:`👀 Что означает «${card.w}»?`,
+        a:card.t, o:shuffle([card.t,...wrongRU.slice(0,3)])
+      });
+    }
 
     // Касание 3 — Пишешь по-английски
     quizzes.push({
@@ -491,16 +510,21 @@ function build5Touches(cards){
       alts:[card.w.toLowerCase().replace(/[.,!?]/g,"")]
     });
 
-    // Касание 4 — Говоришь (shadowing)
-    quizzes.push({
-      touch:4,
-      type:"shadow",
-      p:`🗣 Повтори вслух: "${card.w}"`,
-      word:card.w,
-      translation:card.t,
-      example:card.e,
-      a:card.w.toLowerCase()
-    });
+    // Касание 4 — Говоришь (shadowing). В режиме «не могу говорить»: выбираешь как сказать
+    if(canSpeak){
+      quizzes.push({
+        touch:4, type:"shadow",
+        p:`🗣 Повтори вслух: "${card.w}"`,
+        word:card.w, translation:card.t, example:card.e,
+        a:card.w.toLowerCase()
+      });
+    } else {
+      quizzes.push({
+        touch:4, type:"mcq",
+        p:`🔇 Выбери, как сказать: «${card.t}»`,
+        a:card.w, o:shuffle([card.w,...wrongEN.slice(0,3)])
+      });
+    }
 
     // Касание 5 — Контекст (составь фразу или выбери перевод)
     const words=card.w.split(" ");
@@ -529,7 +553,7 @@ function build5Touches(cards){
   // Финальный вопрос — главное слово
   const keyCard=cards.find(c=>c.new)||cards[0];
   if(keyCard){
-    const wrongFinal=shuffle(pool.filter(t=>t!==keyCard.t)).slice(0,3);
+    const wrongFinal=topUpDistractors(shuffle(pool.filter(t=>t!==keyCard.t)).slice(0,3),3,allRU,keyCard.t);
     quizzes.push({
       touch:5,
       type:"mcq",
@@ -541,9 +565,56 @@ function build5Touches(cards){
   return quizzes;
 }
 
+// ── МЕТОД №4: CHUNKING — речевые шаблоны со слотами ───────────
+// Врач учит готовую конструкцию и подставляет разные слова.
+// keys — по каким keyword-ам урока цеплять шаблон.
+const DENTAL_CHUNKS = [
+  { keys:["pain","hurt","ache"], frame:"Do you have any ___?", frameRu:"У вас есть ___?",
+    a:"pain", aRu:"боль", o:["pain","swelling","allergies"], more:["swelling","allergies","bleeding"] },
+  { keys:["pain","hurt"], frame:"Does it hurt when I ___?", frameRu:"Больно, когда я ___?",
+    a:"touch this tooth", aRu:"трогаю этот зуб", o:["touch this tooth","press here","tap it"], more:["press here","tap it"] },
+  { keys:["open","close","bite","rinse","spit"], frame:"Please ___ your mouth.", frameRu:"Пожалуйста, ___ рот.",
+    a:"open", aRu:"откройте", o:["open","close","rinse"], more:["close","rinse"] },
+  { keys:["open","bite","numb"], frame:"I'm going to ___ now.", frameRu:"Сейчас я ___.",
+    a:"clean the tooth", aRu:"почищу зуб", o:["clean the tooth","take an X-ray","give you an injection"], more:["take an X-ray","give you an injection"] },
+  { keys:["appointment","today","book","greeting"], frame:"Would you like to ___?", frameRu:"Хотите ___?",
+    a:"book an appointment", aRu:"записаться на приём", o:["book an appointment","rinse your mouth","take a seat"], more:["take a seat","reschedule"] },
+  { keys:["scale","pain"], frame:"On a scale of 1 to 10, how ___ is the pain?", frameRu:"По шкале от 1 до 10, насколько ___ боль?",
+    a:"bad", aRu:"сильная", o:["bad","strong","sharp"], more:["strong","sharp"] },
+  { keys:["sensitive","pain","numb"], frame:"You may feel a little ___.", frameRu:"Вы можете почувствовать лёгкое ___.",
+    a:"pressure", aRu:"давление", o:["pressure","discomfort","cold"], more:["discomfort","cold"] },
+  { keys:["insurance","appointment","admin"], frame:"Do you have ___?", frameRu:"У вас есть ___?",
+    a:"dental insurance", aRu:"стоматологическая страховка", o:["dental insurance","a referral","an appointment"], more:["a referral","an appointment"] },
+  { keys:["today","appointment","week"], frame:"Can you come in ___?", frameRu:"Вы можете прийти ___?",
+    a:"today", aRu:"сегодня", o:["today","next week","on Tuesday"], more:["next week","on Tuesday"] },
+  { keys:["rinse","spit","numb","aftercare"], frame:"Try not to ___ for two hours.", frameRu:"Старайтесь не ___ два часа.",
+    a:"eat", aRu:"есть", o:["eat","drink","smoke"], more:["drink","smoke"] },
+];
+// Универсальные — если у урока нет подходящего keyword
+const UNIVERSAL_CHUNKS = [DENTAL_CHUNKS[2], DENTAL_CHUNKS[6], DENTAL_CHUNKS[4]];
+
+function buildTemplateTasks(lesson, cards){
+  const kw = ((lesson&&lesson.keyword)||"").toLowerCase();
+  let matched = DENTAL_CHUNKS.filter(c=>c.keys.includes(kw));
+  if(matched.length===0){
+    // детерминированный выбор универсального шаблона по дню урока
+    const idx = ((lesson&&lesson.day)||1) % UNIVERSAL_CHUNKS.length;
+    matched = [UNIVERSAL_CHUNKS[idx]];
+  }
+  return matched.slice(0,1).map(c=>({
+    touch:5, type:"template",
+    p:"🧩 Собери фразу — подставь нужное слово:",
+    frame:c.frame, frameRu:c.frameRu,
+    a:c.a, aRu:c.aRu,
+    o:shuffle([c.a, ...c.o.filter(x=>x!==c.a)]).slice(0,4),
+    more:c.more||[],
+    full:c.frame.replace("___", c.a),
+  }));
+}
+
 // ── Shadowing component ──────────────────────────────────────
 function ShadowingTask({q, onResult}){
-  const {listening,transcript,start,reset}=useSpeechRecognition();
+  const {listening,transcript,start,reset,micError}=useSpeechRecognition();
   const [done,setDone]=useState(false);
   const [score,setScore]=useState(0);
 
@@ -590,25 +661,101 @@ function ShadowingTask({q, onResult}){
         <div style={{fontSize:13,color:"#64748B",marginBottom:4}}>{q.translation}</div>
         <div style={{fontSize:12,color:"#94A3B8",fontStyle:"italic"}}>"{q.example}"</div>
       </div>
-      <div style={{display:"flex",gap:8}}>
+      {/* Прослушать образец + (если доступен) микрофон */}
+      <div style={{display:"flex",gap:8,alignItems:"center"}}>
         <SpeakBtn text={q.word} size={40}/>
-        <button onClick={handleSpeak} style={{flex:1,background:listening?"#EF4444":"#8B5CF6",color:"#fff",border:"none",borderRadius:12,padding:"12px",fontWeight:700,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>
-          {listening?"⏹ Стоп...":"🎤 Говори!"}
+        <button onClick={handleSpeak} style={{flex:1,background:listening?"#EF4444":"#EDE9FE",color:listening?"#fff":"#6D28D9",border:"none",borderRadius:12,padding:"12px",fontWeight:700,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>
+          {listening?"⏹ Стоп...":"🎤 Сказать в микрофон"}
         </button>
       </div>
-      {listening&&<div style={{textAlign:"center",color:"#8B5CF6",fontSize:12,animation:"pulse 1s infinite"}}>
-        🎙 Слушаю...
-      </div>}
-      <button onClick={()=>onResult(true)} style={{background:"none",border:"none",color:"#94A3B8",fontSize:12,cursor:"pointer",padding:"4px"}}>
-        Пропустить →
+      {listening&&<div style={{textAlign:"center",color:"#8B5CF6",fontSize:12,animation:"pulse 1s infinite"}}>🎙 Слушаю...</div>}
+      {micError&&<div style={{textAlign:"center",color:"#94A3B8",fontSize:11}}>Микрофон недоступен здесь (заработает в приложении) — просто повтори вслух и нажми ниже 👇</div>}
+      {/* Главная кнопка — работает всегда */}
+      <button onClick={()=>onResult(true)} style={{background:"#10B981",color:"#fff",border:"none",borderRadius:12,padding:"13px",fontWeight:800,fontSize:15,cursor:"pointer",fontFamily:"inherit",boxShadow:"0 4px 12px #10B98144"}}>
+        ✓ Я повторил вслух
       </button>
     </div>
   );
 }
 
+// ── Соедини пары (как в Duolingo) ────────────────────────────
+function MatchTask({pairs, onDone}){
+  // левая колонка — английский, правая — русский, перемешаны независимо
+  const [leftCol]=useState(()=>shuffle(pairs.map((p,i)=>({...p,id:i}))));
+  const [rightCol]=useState(()=>shuffle(pairs.map((p,i)=>({...p,id:i}))));
+  const [selL,setSelL]=useState(null);   // id выбранного слева
+  const [selR,setSelR]=useState(null);   // id выбранного справа
+  const [matched,setMatched]=useState([]); // id уже соединённых
+  const [wrong,setWrong]=useState(null);   // [idL,idR] для красной вспышки
+
+  useEffect(()=>{
+    if(selL===null||selR===null) return;
+    if(selL===selR){
+      const m=[...matched,selL];
+      setMatched(m); playSound("correct"); haptic("success");
+      setSelL(null); setSelR(null);
+      if(m.length===pairs.length){ setTimeout(()=>onDone(true),450); }
+    } else {
+      setWrong([selL,selR]); playSound("wrong"); haptic("error");
+      setTimeout(()=>{ setWrong(null); setSelL(null); setSelR(null); },550);
+    }
+  },[selL,selR]);
+
+  function tile(item,side){
+    const id=item.id;
+    const isMatched=matched.includes(id);
+    const isSel=(side==="L"?selL:selR)===id;
+    const isWrong=wrong&&wrong.includes(id)&&(side==="L"?selL:selR)===id;
+    let bg="#fff",border="2px solid #E2E8F0",col="#1E293B",opacity=1;
+    if(isMatched){bg="#D1FAE5";border="2px solid #10B981";opacity=0.35;}
+    else if(isWrong){bg="#FEE2E2";border="2px solid #EF4444";col="#991B1B";}
+    else if(isSel){bg="#DBEAFE";border="2px solid #3B82F6";col="#1D4ED8";}
+    return <button key={id} disabled={isMatched}
+      onClick={()=>{ if(isMatched) return; haptic("select"); if(side==="L"){speak(item.en,0.9); setSelL(id);} else setSelR(id); }}
+      style={{background:bg,border,color:col,opacity,borderRadius:14,padding:"14px 10px",fontSize:14,fontWeight:600,cursor:isMatched?"default":"pointer",fontFamily:"inherit",transition:"all 0.15s",width:"100%",minHeight:52}}>
+      {side==="L"?item.en:item.ru}
+    </button>;
+  }
+
+  return(
+    <div style={{display:"flex",gap:12}}>
+      <div style={{flex:1,display:"flex",flexDirection:"column",gap:8}}>{leftCol.map(it=>tile(it,"L"))}</div>
+      <div style={{flex:1,display:"flex",flexDirection:"column",gap:8}}>{rightCol.map(it=>tile(it,"R"))}</div>
+    </div>
+  );
+}
+
+// ── Переключатель «тихого режима» (не могу слушать / говорить) ─
+function QuietToggle({canListen,canSpeak,onToggleListen,onToggleSpeak}){
+  const btn=(on,iconOn,iconOff,onClick,title)=>(
+    <button onClick={onClick} title={title}
+      style={{background:on?"rgba(255,255,255,0.12)":"#7C3AED",border:"none",borderRadius:9,padding:"5px 9px",cursor:"pointer",fontSize:14,lineHeight:1,fontFamily:"inherit"}}>
+      {on?iconOn:iconOff}
+    </button>
+  );
+  return(
+    <div style={{display:"flex",gap:6}}>
+      {btn(canListen,"🎧","🔇",onToggleListen,"Не могу слушать")}
+      {btn(canSpeak,"🎤","🙊",onToggleSpeak,"Не могу говорить")}
+    </div>
+  );
+}
+
 // ── Главный QuizEngine ───────────────────────────────────────
-function QuizEngine({quizzes:rawQuizzes, cards, lesson, hearts, onLoseHeart, onComplete, onAddMistake, onExit}){
-  const quizzes=build5Touches(cards&&cards.length>0?cards:(rawQuizzes||[]).map(q=>({w:q.a,t:q.p,e:q.a,i:"🦷",new:false})));
+function QuizEngine({quizzes:rawQuizzes, cards, lesson, hearts, onLoseHeart, onComplete, onAddMistake, onExit, canListen=true, canSpeak=true, onToggleListen, onToggleSpeak}){
+  // Задания строим один раз на урок (и при смене режима «тихо»), а не каждый рендер
+  const quizzes=useMemo(()=>{
+    const base=build5Touches(cards&&cards.length>0?cards:(rawQuizzes||[]).map(q=>({w:q.a,t:q.p,e:q.a,i:"🦷",new:false})), {canListen, canSpeak});
+    // «Соедини пары» в начале урока (как в Duolingo) — из коротких слов урока
+    const shortCards=(cards||[]).filter(c=>c.w&&c.w.length<=24&&c.t);
+    const matchTask=shortCards.length>=3
+      ? [{type:"match",touch:1,p:"🔗 Соедини слово и перевод:",pairs:shuffle(shortCards).slice(0,5).map(c=>({en:c.w,ru:c.t}))}]
+      : [];
+    return [...matchTask, ...base, ...buildTemplateTasks(lesson, cards)];
+  },[lesson&&lesson.id, canListen, canSpeak]);
+
+  // «Не могу слушать» → глушим весь звук на время урока
+  useEffect(()=>{ setAudioEnabled(canListen); return ()=>setAudioEnabled(true); },[canListen]);
 
   const [step,setStep]=useState(0);
   const [sel,setSel]=useState(null);
@@ -624,6 +771,7 @@ function QuizEngine({quizzes:rawQuizzes, cards, lesson, hearts, onLoseHeart, onC
   const [showConfetti,setShowConfetti]=useState(false);
   const [streak,setStreak]=useState(0);
   const [mistakes,setMistakes]=useState([]); // слова для повторения
+  const advTimer=useRef(null);
 
   const q=quizzes[step]||{};
 
@@ -635,14 +783,21 @@ function QuizEngine({quizzes:rawQuizzes, cards, lesson, hearts, onLoseHeart, onC
       setWordOrder({available:shuffle([...words,...extra]),chosen:[]});
     }
     setSel(null);setTyped("");setConfirmed(false);
+    return ()=>clearTimeout(advTimer.current);
   },[step]);
 
-  function getAnswer(){
-    if(q.type==="mcq"||q.type==="listen") return sel;
-    if(q.type==="translate") return sel;
+  function getAnswer(override){
+    if(override!==undefined&&override!==null) return override;
     if(q.type==="type") return typed.trim().toLowerCase();
     if(q.type==="wordbank") return wordOrder.chosen.join(" ");
     return sel;
+  }
+
+  // Выбор варианта = сразу проверка (меньше кнопок)
+  function chooseAndConfirm(opt){
+    if(confirmed) return;
+    setSel(opt); haptic("select");
+    confirm(opt);
   }
 
   function checkCorrect(answer){
@@ -661,8 +816,8 @@ function QuizEngine({quizzes:rawQuizzes, cards, lesson, hearts, onLoseHeart, onC
     return false;
   }
 
-  function confirm(){
-    const answer=getAnswer();
+  function confirm(override){
+    const answer=getAnswer(override);
     if(!answer&&q.type!=="wordbank") return;
     if(q.type==="wordbank"&&wordOrder.chosen.length===0) return;
     setConfirmed(true);
@@ -674,13 +829,16 @@ function QuizEngine({quizzes:rawQuizzes, cards, lesson, hearts, onLoseHeart, onC
       playSound(streak>=2?"complete":"correct");
       haptic("success");
       if(q.word) updateSRS(q.word,true);
-      if(q.type!=="listen") speak(q.a,0.85);
+      if(q.type!=="listen") speak(q.full||q.a,0.85);
+      // Автопереход при верном ответе — без кнопки «Далее»
+      clearTimeout(advTimer.current);
+      advTimer.current=setTimeout(()=>next(),1050);
     } else {
       setMood("wrong");setLocalH(h=>Math.max(0,h-1));onLoseHeart();
       setShake(true);setTimeout(()=>setShake(false),500);
       playSound("wrong");haptic("error");setStreak(0);
       if(q.word) updateSRS(q.word,false);
-      speak(q.a,0.8);
+      speak(q.full||q.a,0.8);
       onAddMistake({wrong:answer||"—",correct:q.a,lesson:lesson.title});
       setMistakes(m=>[...m,q.a]);
     }
@@ -699,6 +857,12 @@ function QuizEngine({quizzes:rawQuizzes, cards, lesson, hearts, onLoseHeart, onC
   function handleShadowResult(good){
     const earned=Math.max(3,Math.round((lesson.xp||20)/Math.max(1,quizzes.length)));
     if(good){setMood("excited");setXp(x=>x+earned);setXpPop(earned);playSound("correct");haptic("success");}
+    next();
+  }
+
+  function handleMatchResult(){
+    const earned=Math.max(4,Math.round((lesson.xp||20)/Math.max(1,quizzes.length)));
+    setMood("excited");setXp(x=>x+earned);setXpPop(earned);playSound("complete");haptic("success");
     next();
   }
 
@@ -742,16 +906,17 @@ function QuizEngine({quizzes:rawQuizzes, cards, lesson, hearts, onLoseHeart, onC
       {xpPop>0&&<XPPop xp={xpPop} onDone={()=>setXpPop(0)}/>}
 
       {/* Header */}
-      <div style={{background:"#1E293B",padding:"14px 18px",display:"flex",alignItems:"center",gap:12}}>
+      <div style={{background:"#1E293B",padding:"14px 18px",display:"flex",alignItems:"center",gap:10}}>
         <button onClick={onExit} style={{background:"none",border:"none",color:"#94A3B8",fontSize:20,cursor:"pointer"}}>✕</button>
         <div style={{flex:1}}><Bar v={step} m={quizzes.length} color={touchColors[q.touch||1]||"#0EA5E9"}/></div>
+        {onToggleListen&&<QuietToggle canListen={canListen} canSpeak={canSpeak} onToggleListen={onToggleListen} onToggleSpeak={onToggleSpeak}/>}
         <div style={{display:"flex",gap:2}}>{[1,2,3].map(i=><span key={i} style={{fontSize:14,opacity:i<=localH?1:0.25}}>❤️</span>)}</div>
       </div>
 
       {/* Touch indicator */}
       <div style={{background:touchColors[q.touch||1]||"#0EA5E9",padding:"6px 18px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
         <div style={{color:"#fff",fontSize:11,fontWeight:800,letterSpacing:1}}>
-          {touchLabels[q.touch||1]} · {step+1}/{quizzes.length}
+          {q.type==="template"?"🧩 ШАБЛОН":q.type==="match"?"🔗 ПАРЫ":touchLabels[q.touch||1]} · {step+1}/{quizzes.length}
         </div>
         <div style={{display:"flex",gap:3}}>
           {[1,2,3,4,5].map(t=>(
@@ -779,6 +944,9 @@ function QuizEngine({quizzes:rawQuizzes, cards, lesson, hearts, onLoseHeart, onC
         {/* Shadow task */}
         {q.type==="shadow"&&<ShadowingTask q={q} onResult={handleShadowResult}/>}
 
+        {/* Соедини пары (Duolingo) */}
+        {q.type==="match"&&<MatchTask pairs={q.pairs} onDone={handleMatchResult}/>}
+
         {/* MCQ */}
         {(q.type==="mcq"||q.type==="listen")&&(
           <div style={{display:"flex",flexDirection:"column",gap:8}}>
@@ -788,7 +956,7 @@ function QuizEngine({quizzes:rawQuizzes, cards, lesson, hearts, onLoseHeart, onC
               if(confirmed&&isC){bg="#D1FAE5";border="2px solid #10B981";col="#065F46";emoji=" ✅";}
               else if(isSel&&confirmed&&!isC){bg="#FEE2E2";border="2px solid #EF4444";col="#991B1B";emoji=" ❌";}
               else if(isSel&&!confirmed){bg="#DBEAFE";border="2px solid #3B82F6";col="#1D4ED8";}
-              return <button key={opt} onClick={()=>{if(!confirmed){setSel(opt);haptic("select");playSound("flip");}}}
+              return <button key={opt} disabled={confirmed} onClick={()=>chooseAndConfirm(opt)}
                 style={{background:bg,border,color:col,borderRadius:13,padding:"12px 14px",fontSize:14,fontWeight:500,textAlign:"left",cursor:confirmed?"default":"pointer",fontFamily:"inherit",transition:"all 0.15s"}}>
                 {opt}{emoji}
               </button>;
@@ -805,11 +973,59 @@ function QuizEngine({quizzes:rawQuizzes, cards, lesson, hearts, onLoseHeart, onC
               if(confirmed&&isC){bg="#D1FAE5";border="2px solid #10B981";col="#065F46";}
               else if(isSel&&confirmed&&!isC){bg="#FEE2E2";border="2px solid #EF4444";col="#991B1B";}
               else if(isSel&&!confirmed){bg="#DBEAFE";border="2px solid #3B82F6";col="#1D4ED8";}
-              return <button key={opt} onClick={()=>{if(!confirmed){setSel(opt);haptic("select");speak(opt,0.9);}}}
+              return <button key={opt} disabled={confirmed} onClick={()=>chooseAndConfirm(opt)}
                 style={{background:bg,border,color:col,borderRadius:20,padding:"10px 18px",fontSize:14,fontWeight:600,cursor:confirmed?"default":"pointer",fontFamily:"inherit",boxShadow:"0 2px 4px rgba(0,0,0,0.06)"}}>
                 {opt}
               </button>;
             })}
+          </div>
+        )}
+
+        {/* Template — метод №4 Chunking */}
+        {q.type==="template"&&(
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            {/* Рамка-шаблон с живым превью выбранного слова */}
+            <div style={{background:"#EEF2FF",borderRadius:14,padding:"14px 16px",border:"2px solid #C7D2FE"}}>
+              <div style={{fontSize:16,fontWeight:800,color:"#3730A3",lineHeight:1.6}}>
+                {q.frame.split("___").map((part,i,arr)=>(
+                  <span key={i}>
+                    {part}
+                    {i<arr.length-1&&(
+                      sel
+                        ?<mark style={{background:confirmed?(sel===q.a?"#A7F3D0":"#FCA5A5"):"#C7D2FE",color:"#1E293B",borderRadius:6,padding:"1px 6px"}}>{sel}</mark>
+                        :<span style={{color:"#A5B4FC",letterSpacing:2}}>______</span>
+                    )}
+                  </span>
+                ))}
+              </div>
+              <div style={{fontSize:12,color:"#6366F1",marginTop:6}}>{q.frameRu}</div>
+            </div>
+            {/* Варианты для слота */}
+            <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+              {(q.o||[]).map(opt=>{
+                const isC=opt===q.a,isSel=sel===opt;
+                let bg="#fff",border="2px solid #E2E8F0",col="#1E293B";
+                if(confirmed&&isC){bg="#D1FAE5";border="2px solid #10B981";col="#065F46";}
+                else if(isSel&&confirmed&&!isC){bg="#FEE2E2";border="2px solid #EF4444";col="#991B1B";}
+                else if(isSel&&!confirmed){bg="#E0E7FF";border="2px solid #6366F1";col="#3730A3";}
+                return <button key={opt} disabled={confirmed} onClick={()=>chooseAndConfirm(opt)}
+                  style={{background:bg,border,color:col,borderRadius:14,padding:"10px 16px",fontSize:14,fontWeight:600,cursor:confirmed?"default":"pointer",fontFamily:"inherit"}}>
+                  {opt}
+                </button>;
+              })}
+            </div>
+            {/* Обучение паттерну — тот же шаблон с другими словами */}
+            {confirmed&&isCorrect&&q.more&&q.more.length>0&&(
+              <div style={{background:"#FEF9C3",borderRadius:12,padding:"10px 14px",fontSize:13,color:"#854D0E"}}>
+                <div style={{fontWeight:800,marginBottom:4}}>💡 Тот же шаблон работает и так:</div>
+                {q.more.map((mf,i)=>(
+                  <div key={i} style={{display:"flex",alignItems:"center",gap:6,marginTop:3}}>
+                    <span>• {q.frame.replace("___",mf)}</span>
+                    <SpeakBtn text={q.frame.replace("___",mf)} size={22}/>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -855,13 +1071,13 @@ function QuizEngine({quizzes:rawQuizzes, cards, lesson, hearts, onLoseHeart, onC
         )}
       </div>
 
-      {/* Bottom bar — не показываем для shadow */}
-      {q.type!=="shadow"&&(
+      {/* Bottom bar. Кнопка «Проверить» — только для ввода/сборки (их нельзя проверить по клику).
+          Варианты проверяются сразу по выбору. При верном ответе — автопереход, «Далее» не нужен. */}
+      {q.type!=="shadow"&&q.type!=="match"&&(confirmed || q.type==="type" || q.type==="wordbank")&&(
         <div style={{padding:"12px 18px",background:confirmed?(isCorrect?"#D1FAE5":"#FEE2E2"):"#fff",borderTop:"1px solid #E2E8F0"}}>
           {!confirmed
-            ?<Btn onClick={confirm}
+            ?<Btn onClick={()=>confirm()}
                 disabled={
-                  (q.type==="mcq"||q.type==="listen"||q.type==="translate")&&!sel ||
                   q.type==="type"&&!typed.trim() ||
                   q.type==="wordbank"&&wordOrder.chosen.length===0
                 }
@@ -874,13 +1090,16 @@ function QuizEngine({quizzes:rawQuizzes, cards, lesson, hearts, onLoseHeart, onC
                 {!isCorrect&&q.type!=="type"&&(
                   <div style={{display:"flex",alignItems:"center",gap:6,marginTop:2}}>
                     <div style={{fontSize:12,color:"#64748B",maxWidth:200}}>→ {q.a}</div>
-                    <SpeakBtn text={q.a} size={24}/>
+                    <SpeakBtn text={q.full||q.a} size={24}/>
                   </div>
                 )}
               </div>
-              <button onClick={next} style={{background:isCorrect?"#10B981":"#EF4444",color:"#fff",border:"none",borderRadius:12,padding:"10px 22px",fontWeight:700,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>
-                Далее →
-              </button>
+              {/* При верном ответе переход автоматический — кнопку не показываем */}
+              {!isCorrect&&(
+                <button onClick={next} style={{background:"#EF4444",color:"#fff",border:"none",borderRadius:12,padding:"10px 22px",fontWeight:700,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>
+                  Далее →
+                </button>
+              )}
             </div>}
         </div>
       )}
@@ -1394,7 +1613,7 @@ const UNITS = [
   // ════════════════════════════════════════════════
   // БЛОК 5 — Хирургия (фразы, DadChar)
   // ════════════════════════════════════════════════
-  { id:"u5", title:"Surgery Phrases", titleRu:"Фразы хирургии", color:"#EF4444", icon:"🔪", char:"dad",
+  { id:"u5", title:"Surgery Phrases", titleRu:"Фразы хирургии", color:"#EF4444", icon:"🔪", char:"dad", spec:"surgeon",
     lessons:[
       { id:"l35", day:35, title:"Before Extraction", titleRu:"Перед удалением", icon:"🦷", xp:15, keyword:"extract",
         cards:[
@@ -1480,7 +1699,7 @@ const UNITS = [
   // ════════════════════════════════════════════════
   // БЛОК 6 — Имплантология (фразы, DadChar)
   // ════════════════════════════════════════════════
-  { id:"u6", title:"Implant Phrases", titleRu:"Фразы имплантации", color:"#8B5CF6", icon:"🔩", char:"dad",
+  { id:"u6", title:"Implant Phrases", titleRu:"Фразы имплантации", color:"#8B5CF6", icon:"🔩", char:"dad", spec:"surgeon",
     lessons:[
       { id:"l41", day:41, title:"Explaining Implants", titleRu:"Объясняем имплант", icon:"🔩", xp:18, keyword:"titanium",
         cards:[
@@ -1552,7 +1771,7 @@ const UNITS = [
   // ════════════════════════════════════════════════
   // БЛОК 7 — Ортопедия (фразы, DadChar)
   // ════════════════════════════════════════════════
-  { id:"u7", title:"Prosthetics Phrases", titleRu:"Фразы ортопедии", color:"#EC4899", icon:"👑", char:"dad",
+  { id:"u7", title:"Prosthetics Phrases", titleRu:"Фразы ортопедии", color:"#EC4899", icon:"👑", char:"dad", spec:"surgeon",
     lessons:[
       { id:"l46", day:46, title:"Crown Preparation", titleRu:"Подготовка под коронку", icon:"👑", xp:18, keyword:"prepare",
         cards:[
@@ -1836,9 +2055,434 @@ const UNITS = [
           {type:"mcq",p:"Основа отношений врач-пациент?",a:"Listen → explain → consent",o:["Listen → explain → consent","Treat → explain → bill"]},
         ]},
     ]},
+  // ════════════════════════════════════════════════
+  // БЛОК 11 — Работа за границей (переезд и трудоустройство)
+  // ════════════════════════════════════════════════
+  { id:"u11", title:"Working Abroad", titleRu:"Работа за границей", color:"#0D9488", icon:"🌍", char:"mom",
+    lessons:[
+      { id:"l66", day:66, title:"Job Interview", titleRu:"Собеседование", icon:"💼", xp:14, keyword:"interview",
+        cards:[
+          {w:"I'm a licensed dentist with five years of experience.",t:"Я дипломированный стоматолог с пятилетним опытом.",e:"Introduce yourself clearly at the start.",i:"💼",new:true},
+          {w:"I specialize in restorative dentistry.",t:"Я специализируюсь на терапевтической стоматологии.",e:"State your main field.",i:"🦷",new:false},
+          {w:"Why do you want to work here?",t:"Почему вы хотите работать у нас?",e:"A very common interview question.",i:"❓",new:false},
+          {w:"I'm confident working with anxious patients.",t:"Я уверенно работаю с тревожными пациентами.",e:"Highlight a real strength.",i:"💪",new:false},
+          {w:"When can you start?",t:"Когда вы можете приступить?",e:"Be ready to talk about availability.",i:"📅",new:false},
+        ],
+        quiz:[
+          {type:"mcq",p:"Как представиться на собеседовании?",a:"I'm a licensed dentist.",o:["I'm a licensed dentist.","I want money."]},
+          {type:"mcq",p:"'When can you start?' — это?",a:"Когда вы можете приступить?",o:["Когда вы можете приступить?","Где вы учились?"]},
+        ]},
+      { id:"l67", day:67, title:"Registration & Licensing", titleRu:"Регистрация и лицензия", icon:"📜", xp:14, keyword:"license",
+        cards:[
+          {w:"I need to register with the dental council.",t:"Мне нужно зарегистрироваться в стоматологическом совете.",e:"The first step to work legally.",i:"📜",new:true},
+          {w:"credential evaluation",t:"оценка квалификации (диплома)",e:"They will do a credential evaluation of my diploma.",i:"📋",new:false},
+          {w:"Is my diploma recognized here?",t:"Признаётся ли здесь мой диплом?",e:"Ask about foreign qualification recognition.",i:"🎓",new:false},
+          {w:"I passed the licensing exam.",t:"Я сдал лицензионный экзамен.",e:"Good news to share with an employer.",i:"✅",new:false},
+          {w:"Could you explain the registration process?",t:"Не могли бы вы объяснить процесс регистрации?",e:"Ask politely for guidance.",i:"🗂",new:false},
+        ],
+        quiz:[
+          {type:"mcq",p:"'Is my diploma recognized here?' — это?",a:"Признаётся ли здесь мой диплом?",o:["Признаётся ли здесь мой диплом?","Сколько стоит лечение?"]},
+          {type:"mcq",p:"Как сказать 'я сдал экзамен'?",a:"I passed the exam.",o:["I passed the exam.","I lost the exam."]},
+        ]},
+      { id:"l68", day:68, title:"First Day at the Clinic", titleRu:"Первый день в клинике", icon:"🏥", xp:14, keyword:"clinic",
+        cards:[
+          {w:"Where can I find the instruments?",t:"Где я могу найти инструменты?",e:"A useful question on your first day.",i:"🔧",new:true},
+          {w:"Who is my supervisor?",t:"Кто мой руководитель?",e:"Know who to report to.",i:"👨‍⚕️",new:false},
+          {w:"How do I use the patient software?",t:"Как пользоваться программой для пациентов?",e:"Every clinic has its own system.",i:"💻",new:false},
+          {w:"What is the sterilization protocol?",t:"Какой протокол стерилизации?",e:"Safety protocols differ by country.",i:"🧼",new:false},
+          {w:"Could you show me around?",t:"Не могли бы вы всё показать?",e:"Ask a colleague for a quick tour.",i:"🚪",new:false},
+        ],
+        quiz:[
+          {type:"mcq",p:"Как спросить, где инструменты?",a:"Where can I find the instruments?",o:["Where can I find the instruments?","Where is the exit?"]},
+          {type:"mcq",p:"'Who is my supervisor?' — это?",a:"Кто мой руководитель?",o:["Кто мой руководитель?","Где касса?"]},
+        ]},
+      { id:"l69", day:69, title:"Talking to Colleagues", titleRu:"Общение с коллегами", icon:"🤝", xp:14, keyword:"colleague",
+        cards:[
+          {w:"Could you assist me with this patient?",t:"Не могли бы вы помочь мне с этим пациентом?",e:"Ask a colleague for help politely.",i:"🤝",new:true},
+          {w:"I'd like a second opinion.",t:"Мне нужно второе мнение.",e:"Consult a colleague on a difficult case.",i:"💬",new:false},
+          {w:"Let's discuss the treatment plan.",t:"Давайте обсудим план лечения.",e:"Collaborate with the team.",i:"📝",new:false},
+          {w:"Thank you for your help.",t:"Спасибо за вашу помощь.",e:"Always be polite with the team.",i:"🙏",new:false},
+          {w:"Can we schedule a case review?",t:"Можем ли мы назначить разбор случая?",e:"Suggest a short team meeting.",i:"📆",new:false},
+        ],
+        quiz:[
+          {type:"mcq",p:"Как попросить помощи у коллеги?",a:"Could you assist me?",o:["Could you assist me?","Go away, please."]},
+          {type:"mcq",p:"'I'd like a second opinion.' — это?",a:"Мне нужно второе мнение.",o:["Мне нужно второе мнение.","Мне нужен перерыв."]},
+        ]},
+    ]},
+  // ════════════════════════════════════════════════
+  // БЛОК 12 — Анамнез и безопасность (сбор истории пациента)
+  // ════════════════════════════════════════════════
+  { id:"u12", title:"Medical History", titleRu:"Анамнез и безопасность", color:"#DC2626", icon:"🩺", char:"dad",
+    lessons:[
+      { id:"l70", day:70, title:"Allergies", titleRu:"Аллергии", icon:"⚠️", xp:14, keyword:"allergy",
+        cards:[
+          {w:"Are you allergic to any medications?",t:"Есть ли у вас аллергия на лекарства?",e:"Always ask before treatment.",i:"⚠️",new:true},
+          {w:"Are you allergic to penicillin?",t:"У вас аллергия на пенициллин?",e:"A common and important allergy.",i:"💊",new:false},
+          {w:"Do you have a latex allergy?",t:"Есть ли у вас аллергия на латекс?",e:"Latex gloves can cause reactions.",i:"🧤",new:false},
+          {w:"Have you ever had an allergic reaction?",t:"Была ли у вас аллергическая реакция?",e:"Ask about past reactions.",i:"🤧",new:false},
+          {w:"What happens when you take it?",t:"Что происходит, когда вы это принимаете?",e:"Clarify the type of reaction.",i:"❓",new:false},
+        ],
+        quiz:[
+          {type:"mcq",p:"Как спросить об аллергии на лекарства?",a:"Are you allergic to any medications?",o:["Are you allergic to any medications?","Do you like medications?"]},
+          {type:"mcq",p:"'latex allergy' — это?",a:"аллергия на латекс",o:["аллергия на латекс","аллергия на молоко"]},
+        ]},
+      { id:"l71", day:71, title:"Medications", titleRu:"Лекарства пациента", icon:"💊", xp:14, keyword:"medication",
+        cards:[
+          {w:"Are you taking any medications?",t:"Принимаете ли вы какие-либо лекарства?",e:"Essential history question.",i:"💊",new:true},
+          {w:"Do you take blood thinners?",t:"Принимаете ли вы препараты, разжижающие кровь?",e:"Important before any extraction.",i:"🩸",new:false},
+          {w:"How often do you take it?",t:"Как часто вы это принимаете?",e:"Ask about frequency.",i:"⏰",new:false},
+          {w:"Please bring a list of your medications.",t:"Пожалуйста, принесите список ваших лекарств.",e:"Ask the patient to prepare.",i:"📋",new:false},
+          {w:"Did you take your medication today?",t:"Приняли ли вы лекарство сегодня?",e:"Check before the appointment.",i:"✅",new:false},
+        ],
+        quiz:[
+          {type:"mcq",p:"'blood thinners' — это?",a:"препараты, разжижающие кровь",o:["препараты, разжижающие кровь","витамины"]},
+          {type:"mcq",p:"Как попросить список лекарств?",a:"Please bring a list of your medications.",o:["Please bring a list of your medications.","Please bring money."]},
+        ]},
+      { id:"l72", day:72, title:"Medical Conditions", titleRu:"Общие заболевания", icon:"❤️", xp:14, keyword:"condition",
+        cards:[
+          {w:"Do you have any medical conditions?",t:"Есть ли у вас хронические заболевания?",e:"Screen for systemic conditions.",i:"❤️",new:true},
+          {w:"Do you have diabetes?",t:"У вас диабет?",e:"Affects healing and treatment.",i:"🩸",new:false},
+          {w:"Do you have high blood pressure?",t:"У вас повышенное давление?",e:"Important before anesthesia.",i:"📈",new:false},
+          {w:"Do you have any heart problems?",t:"Есть ли у вас проблемы с сердцем?",e:"Ask about cardiac history.",i:"💓",new:false},
+          {w:"Have you had any surgeries?",t:"Были ли у вас операции?",e:"Part of a full history.",i:"🏥",new:false},
+        ],
+        quiz:[
+          {type:"mcq",p:"Как спросить про диабет?",a:"Do you have diabetes?",o:["Do you have diabetes?","Do you have a car?"]},
+          {type:"mcq",p:"'high blood pressure' — это?",a:"повышенное давление",o:["повышенное давление","низкий сахар"]},
+        ]},
+      { id:"l73", day:73, title:"Special Cases", titleRu:"Особые случаи", icon:"🤰", xp:14, keyword:"pregnant",
+        cards:[
+          {w:"Are you pregnant?",t:"Вы беременны?",e:"Always ask female patients.",i:"🤰",new:true},
+          {w:"Are you breastfeeding?",t:"Кормите ли вы грудью?",e:"Affects medication choice.",i:"🍼",new:false},
+          {w:"Do you smoke?",t:"Вы курите?",e:"Affects healing and gums.",i:"🚬",new:false},
+          {w:"When did you last eat?",t:"Когда вы последний раз ели?",e:"Useful before sedation.",i:"🍽",new:false},
+          {w:"Is there anything else I should know?",t:"Есть ли ещё что-то, что мне следует знать?",e:"Give the patient a chance to share.",i:"💬",new:false},
+        ],
+        quiz:[
+          {type:"mcq",p:"Как спросить о беременности?",a:"Are you pregnant?",o:["Are you pregnant?","Are you tired?"]},
+          {type:"mcq",p:"'Do you smoke?' — это?",a:"Вы курите?",o:["Вы курите?","Вы спите?"]},
+        ]},
+    ]},
+  // ════════════════════════════════════════════════
+  // БЛОК 13 — После лечения (рекомендации пациенту)
+  // ════════════════════════════════════════════════
+  { id:"u13", title:"Aftercare", titleRu:"После лечения", color:"#0891B2", icon:"🩹", char:"girl",
+    lessons:[
+      { id:"l74", day:74, title:"After Extraction", titleRu:"После удаления", icon:"🩹", xp:14, keyword:"aftercare",
+        cards:[
+          {w:"Bite on the gauze for thirty minutes.",t:"Прикусите марлю на тридцать минут.",e:"Standard advice after extraction.",i:"🩹",new:true},
+          {w:"Do not rinse your mouth today.",t:"Сегодня не полощите рот.",e:"Protect the blood clot.",i:"🚫",new:false},
+          {w:"Avoid hot food and drinks.",t:"Избегайте горячей еды и напитков.",e:"For the first day.",i:"🔥",new:false},
+          {w:"Some bleeding is normal.",t:"Небольшое кровотечение — это нормально.",e:"Reassure the patient.",i:"🩸",new:false},
+          {w:"Do not smoke for forty-eight hours.",t:"Не курите сорок восемь часов.",e:"Smoking slows healing.",i:"🚭",new:false},
+        ],
+        quiz:[
+          {type:"mcq",p:"Что делать после удаления?",a:"Bite on the gauze.",o:["Bite on the gauze.","Rinse hard."]},
+          {type:"mcq",p:"'Do not rinse your mouth today.' — это?",a:"Сегодня не полощите рот.",o:["Сегодня не полощите рот.","Пейте горячий чай."]},
+        ]},
+      { id:"l75", day:75, title:"After Fillings", titleRu:"После пломбы и анестезии", icon:"😶", xp:14, keyword:"numbness",
+        cards:[
+          {w:"Your lip may feel numb for a few hours.",t:"Губа может быть онемевшей несколько часов.",e:"Explain the anesthesia effect.",i:"😶",new:true},
+          {w:"Do not chew until the numbness is gone.",t:"Не жуйте, пока не пройдёт онемение.",e:"Avoid biting the cheek or lip.",i:"🚫",new:false},
+          {w:"You can eat after two hours.",t:"Вы можете есть через два часа.",e:"Let the filling set.",i:"🍽",new:false},
+          {w:"The tooth may be sensitive for a few days.",t:"Зуб может быть чувствительным несколько дней.",e:"Normal after a filling.",i:"🥶",new:false},
+          {w:"Call us if the bite feels high.",t:"Позвоните нам, если прикус кажется высоким.",e:"The filling may need adjustment.",i:"📞",new:false},
+        ],
+        quiz:[
+          {type:"mcq",p:"'Your lip may feel numb.' — это?",a:"Губа может быть онемевшей.",o:["Губа может быть онемевшей.","Губа будет болеть неделю."]},
+          {type:"mcq",p:"Когда можно есть?",a:"You can eat after two hours.",o:["You can eat after two hours.","You can never eat."]},
+        ]},
+      { id:"l76", day:76, title:"Pain Advice", titleRu:"Обезболивание дома", icon:"💊", xp:14, keyword:"painkiller",
+        cards:[
+          {w:"Take a painkiller if you feel pain.",t:"Примите обезболивающее, если чувствуете боль.",e:"Home care advice.",i:"💊",new:true},
+          {w:"Take one tablet every six hours.",t:"Принимайте одну таблетку каждые шесть часов.",e:"Explain the dosage clearly.",i:"⏰",new:false},
+          {w:"Do not take more than the recommended dose.",t:"Не превышайте рекомендованную дозу.",e:"Safety reminder.",i:"⚠️",new:false},
+          {w:"Use a cold compress to reduce swelling.",t:"Приложите холодный компресс, чтобы уменьшить отёк.",e:"For the first day.",i:"🧊",new:false},
+          {w:"Rest and drink plenty of water.",t:"Отдыхайте и пейте много воды.",e:"General recovery advice.",i:"💧",new:false},
+        ],
+        quiz:[
+          {type:"mcq",p:"Как объяснить дозировку?",a:"Take one tablet every six hours.",o:["Take one tablet every six hours.","Take ten tablets now."]},
+          {type:"mcq",p:"'cold compress' — это?",a:"холодный компресс",o:["холодный компресс","горячая грелка"]},
+        ]},
+    ]},
+  // ════════════════════════════════════════════════
+  // БЛОК 14 — Неотложные состояния
+  // ════════════════════════════════════════════════
+  { id:"u14", title:"Emergencies", titleRu:"Неотложные состояния", color:"#EA580C", icon:"🚨", char:"mom",
+    lessons:[
+      { id:"l77", day:77, title:"Bleeding & Swelling", titleRu:"Кровотечение и отёк", icon:"🩸", xp:16, keyword:"bleeding",
+        cards:[
+          {w:"Is the bleeding heavy or light?",t:"Кровотечение сильное или слабое?",e:"Assess the situation.",i:"🩸",new:true},
+          {w:"Press firmly on the area with gauze.",t:"Сильно прижмите марлю к этому месту.",e:"First aid for bleeding.",i:"🩹",new:false},
+          {w:"When did the swelling start?",t:"Когда начался отёк?",e:"Assess an infection.",i:"🎈",new:false},
+          {w:"Do you have a fever?",t:"У вас есть температура?",e:"A sign of infection.",i:"🌡",new:false},
+          {w:"You may need antibiotics.",t:"Вам могут понадобиться антибиотики.",e:"For a spreading infection.",i:"💊",new:false},
+        ],
+        quiz:[
+          {type:"mcq",p:"Как остановить кровотечение?",a:"Press firmly with gauze.",o:["Press firmly with gauze.","Drink cold water."]},
+          {type:"mcq",p:"'Do you have a fever?' — это?",a:"У вас есть температура?",o:["У вас есть температура?","У вас есть время?"]},
+        ]},
+      { id:"l78", day:78, title:"Fainting & Reaction", titleRu:"Обморок и реакция", icon:"🚑", xp:16, keyword:"faint",
+        cards:[
+          {w:"Are you feeling dizzy?",t:"Вы чувствуете головокружение?",e:"Watch for fainting.",i:"💫",new:true},
+          {w:"Take a deep breath and relax.",t:"Сделайте глубокий вдох и расслабьтесь.",e:"Calm an anxious patient.",i:"🌬",new:false},
+          {w:"Do you feel your throat closing?",t:"Чувствуете ли вы, что горло сжимается?",e:"Sign of a severe reaction.",i:"⚠️",new:false},
+          {w:"We are calling an ambulance.",t:"Мы вызываем скорую помощь.",e:"For a medical emergency.",i:"🚑",new:false},
+          {w:"Stay with me — help is coming.",t:"Оставайтесь со мной — помощь уже едет.",e:"Reassure the patient.",i:"🤝",new:false},
+        ],
+        quiz:[
+          {type:"mcq",p:"Как спросить о головокружении?",a:"Are you feeling dizzy?",o:["Are you feeling dizzy?","Are you happy?"]},
+          {type:"mcq",p:"'We are calling an ambulance.' — это?",a:"Мы вызываем скорую помощь.",o:["Мы вызываем скорую помощь.","Мы закрываемся."]},
+        ]},
+      { id:"l79", day:79, title:"Severe Pain & Trauma", titleRu:"Сильная боль и травма", icon:"🦷", xp:16, keyword:"trauma",
+        cards:[
+          {w:"Did you knock out a tooth?",t:"У вас выбит зуб?",e:"Dental trauma assessment.",i:"🦷",new:true},
+          {w:"Keep the tooth in milk.",t:"Держите зуб в молоке.",e:"Preserves a knocked-out tooth.",i:"🥛",new:false},
+          {w:"Come in immediately.",t:"Приезжайте немедленно.",e:"Time matters in trauma.",i:"🏃",new:false},
+          {w:"How bad is the pain, from one to ten?",t:"Насколько сильна боль, от одного до десяти?",e:"Assess pain severity.",i:"📊",new:false},
+          {w:"When did the pain start?",t:"Когда началась боль?",e:"Take a pain history.",i:"⏰",new:false},
+        ],
+        quiz:[
+          {type:"mcq",p:"Как сохранить выбитый зуб?",a:"Keep the tooth in milk.",o:["Keep the tooth in milk.","Wash it with soap."]},
+          {type:"mcq",p:"'Come in immediately.' — это?",a:"Приезжайте немедленно.",o:["Приезжайте немедленно.","Приходите через месяц."]},
+        ]},
+    ]},
+  // ════════════════════════════════════════════════
+  // ТРЕК: ТЕРАПЕВТ (кариес, каналы, реставрации)
+  // ════════════════════════════════════════════════
+  { id:"u15", title:"Restorative & Endo", titleRu:"Терапия: кариес и каналы", color:"#0EA5E9", icon:"🦷", char:"girl", spec:"therapist",
+    lessons:[
+      { id:"l80", day:80, title:"Cavities & Fillings", titleRu:"Кариес и пломбы", icon:"🦷", xp:14, keyword:"cavity",
+        cards:[
+          {w:"You have a cavity.",t:"У вас кариес.",e:"There is a cavity in this tooth.",i:"🦷",new:true},
+          {w:"I need to remove the decay.",t:"Нужно убрать поражённую ткань.",e:"First we remove the decay.",i:"🦷",new:false},
+          {w:"I'll place a filling.",t:"Я поставлю пломбу.",e:"The filling restores the tooth.",i:"⚪",new:false},
+          {w:"This is a composite filling.",t:"Это композитная пломба.",e:"Composite matches your tooth color.",i:"🎨",new:false},
+          {w:"Does it hurt when you bite?",t:"Больно, когда вы кусаете?",e:"We check the bite after.",i:"😬",new:false},
+        ],
+        quiz:[
+          {type:"mcq",p:"'You have a cavity.' — это?",a:"У вас кариес.",o:["У вас кариес.","У вас здоровые зубы."]},
+          {type:"mcq",p:"Как сказать 'я поставлю пломбу'?",a:"I'll place a filling.",o:["I'll place a filling.","I'll remove the tooth."]},
+        ]},
+      { id:"l81", day:81, title:"Root Canal", titleRu:"Лечение каналов", icon:"🦷", xp:14, keyword:"root canal",
+        cards:[
+          {w:"You need root canal treatment.",t:"Вам нужно лечение корневого канала.",e:"The nerve is infected.",i:"🦷",new:true},
+          {w:"The nerve is inflamed.",t:"Нерв воспалён.",e:"That is why it hurts.",i:"⚡",new:false},
+          {w:"I will clean the canals.",t:"Я почищу каналы.",e:"We remove the infected pulp.",i:"🧼",new:false},
+          {w:"We will take an X-ray.",t:"Мы сделаем рентген.",e:"To see the roots.",i:"📷",new:false},
+          {w:"The tooth will need a crown after.",t:"После зубу понадобится коронка.",e:"To protect it.",i:"👑",new:false},
+        ],
+        quiz:[
+          {type:"mcq",p:"'root canal treatment' — это?",a:"лечение корневого канала",o:["лечение корневого канала","удаление зуба"]},
+          {type:"mcq",p:"'We will take an X-ray.' — это?",a:"Мы сделаем рентген.",o:["Мы сделаем рентген.","Мы поставим коронку."]},
+        ]},
+      { id:"l82", day:82, title:"Sensitivity & Prevention", titleRu:"Чувствительность и профилактика", icon:"🥶", xp:14, keyword:"sensitivity",
+        cards:[
+          {w:"Is the tooth sensitive to cold?",t:"Зуб чувствителен к холодному?",e:"A common symptom.",i:"🥶",new:true},
+          {w:"Avoid very sweet foods.",t:"Избегайте очень сладкой пищи.",e:"Sugar causes decay.",i:"🍬",new:false},
+          {w:"Brush twice a day.",t:"Чистите зубы дважды в день.",e:"Basic prevention.",i:"🪥",new:false},
+          {w:"Use fluoride toothpaste.",t:"Используйте пасту с фтором.",e:"Fluoride strengthens enamel.",i:"🧴",new:false},
+          {w:"I recommend a professional cleaning.",t:"Рекомендую профессиональную чистку.",e:"Every six months.",i:"✨",new:false},
+        ],
+        quiz:[
+          {type:"mcq",p:"Как спросить о чувствительности к холодному?",a:"Is the tooth sensitive to cold?",o:["Is the tooth sensitive to cold?","Is the tooth white?"]},
+          {type:"mcq",p:"'Use fluoride toothpaste.' — это?",a:"Используйте пасту с фтором.",o:["Используйте пасту с фтором.","Ешьте больше конфет."]},
+        ]},
+    ]},
+  // ════════════════════════════════════════════════
+  // ТРЕК: ОРТОДОНТ (брекеты, элайнеры, прикус)
+  // ════════════════════════════════════════════════
+  { id:"u16", title:"Orthodontics", titleRu:"Ортодонтия", color:"#8B5CF6", icon:"😁", char:"dad", spec:"ortho",
+    lessons:[
+      { id:"l83", day:83, title:"Braces", titleRu:"Брекеты", icon:"😬", xp:14, keyword:"braces",
+        cards:[
+          {w:"You need braces.",t:"Вам нужны брекеты.",e:"To straighten your teeth.",i:"😬",new:true},
+          {w:"I'll tighten the braces today.",t:"Сегодня я подтяну брекеты.",e:"Regular adjustment.",i:"🔧",new:false},
+          {w:"Avoid hard and sticky food.",t:"Избегайте твёрдой и липкой пищи.",e:"It can damage the braces.",i:"🍬",new:false},
+          {w:"Wear your elastics every day.",t:"Носите резинки каждый день.",e:"They help move the teeth.",i:"➰",new:false},
+          {w:"Your teeth may feel sore for a few days.",t:"Зубы могут побаливать несколько дней.",e:"Normal after adjustment.",i:"😣",new:false},
+        ],
+        quiz:[
+          {type:"mcq",p:"'You need braces.' — это?",a:"Вам нужны брекеты.",o:["Вам нужны брекеты.","Вам нужен рентген."]},
+          {type:"mcq",p:"Как сказать 'носите резинки каждый день'?",a:"Wear your elastics every day.",o:["Wear your elastics every day.","Remove your teeth every day."]},
+        ]},
+      { id:"l84", day:84, title:"Aligners", titleRu:"Элайнеры", icon:"🦷", xp:14, keyword:"aligner",
+        cards:[
+          {w:"We can use clear aligners.",t:"Можно использовать прозрачные элайнеры.",e:"An alternative to braces.",i:"🦷",new:true},
+          {w:"Wear them 22 hours a day.",t:"Носите их 22 часа в сутки.",e:"Remove them only to eat.",i:"⏰",new:false},
+          {w:"Change to the next set every two weeks.",t:"Меняйте на следующий набор каждые две недели.",e:"Follow the plan.",i:"🔁",new:false},
+          {w:"Clean them with cool water.",t:"Мойте их прохладной водой.",e:"Hot water can warp them.",i:"💧",new:false},
+        ],
+        quiz:[
+          {type:"mcq",p:"'clear aligners' — это?",a:"прозрачные элайнеры",o:["прозрачные элайнеры","металлические брекеты"]},
+          {type:"mcq",p:"Сколько носить элайнеры?",a:"Wear them 22 hours a day.",o:["Wear them 22 hours a day.","Wear them one hour a week."]},
+        ]},
+      { id:"l85", day:85, title:"Bite & Alignment", titleRu:"Прикус", icon:"😬", xp:14, keyword:"bite",
+        cards:[
+          {w:"You have an overbite.",t:"У вас глубокий прикус.",e:"The upper teeth cover the lower too much.",i:"😬",new:true},
+          {w:"Your teeth are crowded.",t:"У вас скученность зубов.",e:"There is not enough space.",i:"🦷",new:false},
+          {w:"We need to correct your bite.",t:"Нужно исправить ваш прикус.",e:"For better function.",i:"🔧",new:false},
+          {w:"Treatment will take about eighteen months.",t:"Лечение займёт около восемнадцати месяцев.",e:"Set expectations.",i:"📅",new:false},
+          {w:"You'll wear a retainer afterwards.",t:"После вы будете носить ретейнер.",e:"To keep the teeth in place.",i:"🦷",new:false},
+        ],
+        quiz:[
+          {type:"mcq",p:"'Your teeth are crowded.' — это?",a:"У вас скученность зубов.",o:["У вас скученность зубов.","У вас нет зубов."]},
+          {type:"mcq",p:"Как сказать про ретейнер после лечения?",a:"You'll wear a retainer afterwards.",o:["You'll wear a retainer afterwards.","You'll lose your teeth afterwards."]},
+        ]},
+    ]},
+  // ════════════════════════════════════════════════
+  // ТРЕК: ДЕТСКИЙ СТОМАТОЛОГ (дети, молочные зубы, профилактика)
+  // ════════════════════════════════════════════════
+  { id:"u17", title:"Pediatric Dentistry", titleRu:"Детская стоматология", color:"#F59E0B", icon:"👶", char:"mom", spec:"pediatric",
+    lessons:[
+      { id:"l86", day:86, title:"Talking to Children", titleRu:"Разговор с ребёнком", icon:"😄", xp:14, keyword:"child",
+        cards:[
+          {w:"Can you show me your big smile?",t:"Покажешь свою большую улыбку?",e:"Make the child comfortable.",i:"😄",new:true},
+          {w:"We're just going to count your teeth.",t:"Мы просто посчитаем твои зубки.",e:"Use simple, friendly words.",i:"🔢",new:false},
+          {w:"This is a little tooth tickler.",t:"Это щёточка, которая щекочет зубки.",e:"Explain tools in a fun way.",i:"🪥",new:false},
+          {w:"You're being so brave!",t:"Ты такой смелый!",e:"Praise the child.",i:"⭐",new:false},
+          {w:"It won't hurt, I promise.",t:"Это не больно, обещаю.",e:"Reassure gently.",i:"🤝",new:false},
+        ],
+        quiz:[
+          {type:"mcq",p:"Как похвалить ребёнка?",a:"You're being so brave!",o:["You're being so brave!","You are late again."]},
+          {type:"mcq",p:"'It won't hurt, I promise.' — это?",a:"Это не больно, обещаю.",o:["Это не больно, обещаю.","Будет очень больно."]},
+        ]},
+      { id:"l87", day:87, title:"Baby Teeth & Prevention", titleRu:"Молочные зубы и профилактика", icon:"🦷", xp:14, keyword:"baby teeth",
+        cards:[
+          {w:"These are baby teeth.",t:"Это молочные зубы.",e:"They will fall out naturally.",i:"🦷",new:true},
+          {w:"The tooth is loose.",t:"Зуб шатается.",e:"It will come out soon.",i:"🦷",new:false},
+          {w:"Help your child brush twice a day.",t:"Помогайте ребёнку чистить зубы дважды в день.",e:"Advice for parents.",i:"🪥",new:false},
+          {w:"Limit sugary drinks.",t:"Ограничьте сладкие напитки.",e:"They cause cavities.",i:"🥤",new:false},
+          {w:"We'll apply fluoride varnish.",t:"Мы нанесём фторлак.",e:"To protect the teeth.",i:"🖌",new:false},
+        ],
+        quiz:[
+          {type:"mcq",p:"'baby teeth' — это?",a:"молочные зубы",o:["молочные зубы","зубы мудрости"]},
+          {type:"mcq",p:"Совет родителям про сладкое?",a:"Limit sugary drinks.",o:["Limit sugary drinks.","Drink more soda."]},
+        ]},
+      { id:"l88", day:88, title:"Parent Talk", titleRu:"Разговор с родителями", icon:"👪", xp:14, keyword:"parent",
+        cards:[
+          {w:"Your child has a small cavity.",t:"У вашего ребёнка небольшой кариес.",e:"Inform the parent.",i:"🦷",new:true},
+          {w:"There's nothing to worry about.",t:"Не о чем беспокоиться.",e:"Calm the parent.",i:"🙂",new:false},
+          {w:"Bring your child every six months.",t:"Приводите ребёнка каждые шесть месяцев.",e:"Regular check-ups.",i:"📅",new:false},
+          {w:"A sealant will protect the back teeth.",t:"Герметик защитит задние зубы.",e:"Prevention for molars.",i:"🛡",new:false},
+        ],
+        quiz:[
+          {type:"mcq",p:"Как успокоить родителя?",a:"There's nothing to worry about.",o:["There's nothing to worry about.","This is very serious."]},
+          {type:"mcq",p:"'Bring your child every six months.' — это?",a:"Приводите ребёнка каждые шесть месяцев.",o:["Приводите ребёнка каждые шесть месяцев.","Больше не приходите."]},
+        ]},
+    ]},
+  // ════════════════════════════════════════════════
+  // ТРЕК: АССИСТЕНТ (инструменты, помощь у кресла)
+  // ════════════════════════════════════════════════
+  { id:"u18", title:"Dental Assisting", titleRu:"Ассистирование", color:"#10B981", icon:"🩺", char:"girl", spec:"assistant",
+    lessons:[
+      { id:"l89", day:89, title:"Instruments", titleRu:"Инструменты", icon:"🔧", xp:14, keyword:"instrument",
+        cards:[
+          {w:"Pass me the mirror, please.",t:"Подайте зеркало, пожалуйста.",e:"Chairside request.",i:"🪞",new:true},
+          {w:"I need the suction.",t:"Мне нужен слюноотсос.",e:"Keep the field dry.",i:"💧",new:false},
+          {w:"Hand me the probe.",t:"Подайте зонд.",e:"For examination.",i:"🔧",new:false},
+          {w:"Prepare the composite.",t:"Приготовьте композит.",e:"Get the material ready.",i:"🧪",new:false},
+          {w:"The forceps, please.",t:"Щипцы, пожалуйста.",e:"For extraction.",i:"🔧",new:false},
+        ],
+        quiz:[
+          {type:"mcq",p:"'Pass me the mirror.' — это?",a:"Подайте зеркало.",o:["Подайте зеркало.","Закройте дверь."]},
+          {type:"mcq",p:"Как попросить слюноотсос?",a:"I need the suction.",o:["I need the suction.","I need a coffee."]},
+        ]},
+      { id:"l90", day:90, title:"Chairside Help", titleRu:"Помощь у кресла", icon:"🖐", xp:14, keyword:"chairside",
+        cards:[
+          {w:"Hold the retractor here.",t:"Держите ретрактор здесь.",e:"Retract the cheek.",i:"🖐",new:true},
+          {w:"Mix the material for thirty seconds.",t:"Замешивайте материал тридцать секунд.",e:"Follow the timing.",i:"⏱",new:false},
+          {w:"Rinse and dry the tooth.",t:"Промойте и высушите зуб.",e:"Prepare the surface.",i:"💨",new:false},
+          {w:"Is the patient comfortable?",t:"Пациенту удобно?",e:"Check on the patient.",i:"💺",new:false},
+          {w:"I'll get the anesthetic ready.",t:"Я подготовлю анестетик.",e:"Assist the dentist.",i:"💉",new:false},
+        ],
+        quiz:[
+          {type:"mcq",p:"'Hold the retractor here.' — это?",a:"Держите ретрактор здесь.",o:["Держите ретрактор здесь.","Идите домой."]},
+          {type:"mcq",p:"Как спросить, удобно ли пациенту?",a:"Is the patient comfortable?",o:["Is the patient comfortable?","Is the door open?"]},
+        ]},
+    ]},
+  // ════════════════════════════════════════════════
+  // ТРЕК: АДМИНИСТРАТОР (запись, страховка, оплата)
+  // ════════════════════════════════════════════════
+  { id:"u19", title:"Front Desk", titleRu:"Ресепшн", color:"#6366F1", icon:"📋", char:"mom", spec:"admin",
+    lessons:[
+      { id:"l91", day:91, title:"Booking", titleRu:"Запись на приём", icon:"📅", xp:14, keyword:"booking",
+        cards:[
+          {w:"Good morning, how can I help you?",t:"Доброе утро, чем могу помочь?",e:"Greet warmly.",i:"👋",new:true},
+          {w:"Would you like to book an appointment?",t:"Хотите записаться на приём?",e:"Offer to schedule.",i:"📅",new:false},
+          {w:"Which day works best for you?",t:"Какой день вам удобнее?",e:"Find a time.",i:"🗓",new:false},
+          {w:"Please take a seat.",t:"Пожалуйста, присаживайтесь.",e:"Direct the patient.",i:"💺",new:false},
+          {w:"The doctor will see you shortly.",t:"Врач примет вас скоро.",e:"Reassure the patient.",i:"⏳",new:false},
+        ],
+        quiz:[
+          {type:"mcq",p:"Как предложить записаться?",a:"Would you like to book an appointment?",o:["Would you like to book an appointment?","Would you like to leave?"]},
+          {type:"mcq",p:"'Please take a seat.' — это?",a:"Пожалуйста, присаживайтесь.",o:["Пожалуйста, присаживайтесь.","Пожалуйста, уходите."]},
+        ]},
+      { id:"l92", day:92, title:"Insurance & Payment", titleRu:"Страховка и оплата", icon:"💳", xp:14, keyword:"payment",
+        cards:[
+          {w:"Do you have dental insurance?",t:"Есть ли у вас стоматологическая страховка?",e:"Check coverage.",i:"📋",new:true},
+          {w:"May I see your insurance card?",t:"Можно вашу страховую карту?",e:"Verify details.",i:"💳",new:false},
+          {w:"Your copay is twenty dollars.",t:"Ваш взнос — двадцать долларов.",e:"Explain the cost.",i:"💵",new:false},
+          {w:"How would you like to pay?",t:"Как вы хотите оплатить?",e:"Offer payment options.",i:"💳",new:false},
+          {w:"Here is your receipt.",t:"Вот ваш чек.",e:"Complete the visit.",i:"🧾",new:false},
+        ],
+        quiz:[
+          {type:"mcq",p:"Как спросить о страховке?",a:"Do you have dental insurance?",o:["Do you have dental insurance?","Do you have a dog?"]},
+          {type:"mcq",p:"'Here is your receipt.' — это?",a:"Вот ваш чек.",o:["Вот ваш чек.","Вот ваш зуб."]},
+        ]},
+    ]},
+  // ════════════════════════════════════════════════
+  // ОБЩИЙ БЛОК: Грамматика на приёме (нужна всем)
+  // ════════════════════════════════════════════════
+  { id:"u20", title:"Clinical Grammar", titleRu:"Грамматика на приёме", color:"#7C3AED", icon:"📐", char:"dad",
+    lessons:[
+      { id:"l93", day:93, title:"Asking Questions", titleRu:"Как задавать вопросы", icon:"❓", xp:14, keyword:"questions",
+        cards:[
+          {w:"Do you have any pain?",t:"Есть ли у вас боль? (вопрос с Do)",e:"'Do you...?' — для вопросов да/нет.",i:"❓",new:true},
+          {w:"Are you allergic to anything?",t:"У вас на что-нибудь аллергия? (вопрос с Are)",e:"'Are you...?' — с прилагательными.",i:"❓",new:false},
+          {w:"Have you had this before?",t:"Было ли это у вас раньше? (Present Perfect)",e:"'Have you...?' — о прошлом опыте.",i:"❓",new:false},
+          {w:"Where does it hurt?",t:"Где болит? (вопрос с does)",e:"'does' — для he/she/it.",i:"❓",new:false},
+          {w:"How long has it been like this?",t:"Как долго это продолжается?",e:"Вопрос о длительности.",i:"⏱",new:false},
+        ],
+        quiz:[
+          {type:"mcq",p:"Как спросить про боль (да/нет)?",a:"Do you have any pain?",o:["Do you have any pain?","You pain have?"]},
+          {type:"mcq",p:"'Where does it hurt?' — это?",a:"Где болит?",o:["Где болит?","Когда вы придёте?"]},
+        ]},
+      { id:"l94", day:94, title:"Polite Requests", titleRu:"Вежливые просьбы", icon:"🙏", xp:14, keyword:"polite",
+        cards:[
+          {w:"Could you open your mouth, please?",t:"Не могли бы вы открыть рот? (вежливо)",e:"'Could you...?' — вежливая просьба.",i:"🙏",new:true},
+          {w:"Would you like to rinse?",t:"Хотите прополоскать? (предложение)",e:"'Would you like...?' — вежливое предложение.",i:"🙏",new:false},
+          {w:"Please take a seat.",t:"Пожалуйста, присаживайтесь. (Please + глагол)",e:"'Please + глагол' — мягкая команда.",i:"🙏",new:false},
+          {w:"Let me take a look.",t:"Позвольте я посмотрю. (Let me + глагол)",e:"'Let me...' — объясняешь своё действие.",i:"👀",new:false},
+          {w:"Can you feel this?",t:"Вы это чувствуете? (Can — способность)",e:"'Can you...?' — о способности.",i:"❓",new:false},
+        ],
+        quiz:[
+          {type:"mcq",p:"Как вежливо попросить открыть рот?",a:"Could you open your mouth, please?",o:["Could you open your mouth, please?","Open mouth now!"]},
+          {type:"mcq",p:"'Would you like to rinse?' — это?",a:"Хотите прополоскать?",o:["Хотите прополоскать?","Вы полоскали вчера?"]},
+        ]},
+      { id:"l95", day:95, title:"Talking about the Past", titleRu:"Разговор о прошлом", icon:"⏮", xp:14, keyword:"past",
+        cards:[
+          {w:"When did the pain start?",t:"Когда началась боль? (Past Simple: did)",e:"'did' — для вопросов о прошлом.",i:"⏮",new:true},
+          {w:"It started three days ago.",t:"Это началось три дня назад. (Past Simple)",e:"Прошедшее: глагол + -ed / started.",i:"📅",new:false},
+          {w:"Have you taken any medication?",t:"Вы принимали лекарства? (Present Perfect)",e:"'Have you + 3-я форма' — недавнее прошлое.",i:"💊",new:false},
+          {w:"The swelling has gotten worse.",t:"Отёк усилился. (Present Perfect)",e:"Результат сейчас от прошлого изменения.",i:"📈",new:false},
+          {w:"I haven't eaten since morning.",t:"Я не ел с утра. (отрицание Perfect)",e:"'haven't + 3-я форма'.",i:"🍽",new:false},
+        ],
+        quiz:[
+          {type:"mcq",p:"Как спросить, когда началась боль?",a:"When did the pain start?",o:["When did the pain start?","When start pain?"]},
+          {type:"mcq",p:"'Have you taken any medication?' — это?",a:"Вы принимали лекарства?",o:["Вы принимали лекарства?","Будете ли вы есть?"]},
+        ]},
+    ]},
 ];
 
 const ALL_LESSONS = UNITS.flatMap(u => u.lessons);
+// Общий банк всех карточек — источник отвлекающих вариантов для Active Recall (метод №1)
+const ALL_CARDS = ALL_LESSONS.flatMap(l => l.cards || []);
+
+// ── 6 треков: видимые блоки/уроки для выбранной специальности ──
+// Блок без поля spec — общий (нужен всем). Блок со spec — только для своей специальности.
+function unitsFor(spec){ return UNITS.filter(u => !u.spec || u.spec===spec); }
+function lessonsFor(spec){ return unitsFor(spec).flatMap(u => u.lessons); }
 
 const PLACEMENT_Q = [
   {q:"What does 'open wide' mean?",a:"Откройте рот широко",o:["Закройте рот","Откройте рот широко","Подождите","Повернитесь"]},
@@ -1902,6 +2546,54 @@ const DIALOGUES = [
       {speaker:"doctor", prompt:"Объясни что скорректируешь прикус", correct:"Good catch — thank you for telling me. I'll mark the high spot with articulating paper and adjust it with a fine bur. This takes just a minute and makes a big difference.", hints:["articulating paper","adjust","fine bur","just a minute"]},
       {speaker:"patient", text:"That feels much better now. More natural.", mood:"😊"},
       {speaker:"doctor", prompt:"Подтверди и фиксируй коронку", correct:"Excellent! The fit and shade look perfect. I'm happy with the result. I'll now cement the crown permanently — just stay still for about 5 minutes while the cement sets.", hints:["fit and shade","cement permanently","stay still","5 minutes"]},
+    ]},
+  { id:"d5", title:"Medical History Intake", titleRu:"Сбор анамнеза", icon:"🩺", unit:"u12", xp:22,
+    scenario:"A new patient's first check-up. Take a safe medical history.",
+    scenarioRu:"Первый визит. Собери анамнез безопасно.",
+    turns:[
+      {speaker:"patient", text:"Hi, I'm here for my first check-up.", mood:"🙂"},
+      {speaker:"doctor", prompt:"Спроси об общих заболеваниях", correct:"Welcome! Before we start, I need to ask a few health questions. Do you have any medical conditions, such as diabetes or high blood pressure?", hints:["a few health questions","medical conditions","diabetes","high blood pressure"]},
+      {speaker:"patient", text:"I have high blood pressure, and I take medication for it.", mood:"😐"},
+      {speaker:"doctor", prompt:"Уточни про другие лекарства и разжижающие кровь", correct:"Thank you for letting me know. Are you taking any other medications, for example blood thinners? Could you bring a list next time?", hints:["any other medications","blood thinners","bring a list"]},
+      {speaker:"patient", text:"No blood thinners. But I'm allergic to penicillin.", mood:"😟"},
+      {speaker:"doctor", prompt:"Отметь аллергию и поблагодари", correct:"That's very important — I'll note your penicillin allergy in your file so we avoid it completely. Thank you for telling me.", hints:["very important","note your allergy","avoid it completely"]},
+      {speaker:"patient", text:"Great, thank you for being thorough.", mood:"🙂"},
+      {speaker:"doctor", prompt:"Переходи к осмотру", correct:"Of course — your safety comes first. Now, please have a seat and open wide so I can take a look.", hints:["your safety comes first","have a seat","open wide","take a look"]},
+    ]},
+  { id:"d6", title:"Anxious Patient", titleRu:"Тревожный пациент", icon:"😰", unit:"u8", xp:22,
+    scenario:"A nervous patient who avoids the dentist. Build trust.",
+    scenarioRu:"Пациент боится лечения. Расположи к себе.",
+    turns:[
+      {speaker:"patient", text:"I really hate the dentist. I've been putting this off for years.", mood:"😰"},
+      {speaker:"doctor", prompt:"Признай чувства и дай контроль", correct:"I completely understand, and I'm really glad you came in today. We'll go slowly, and I'll explain everything before I do it. You're in control — just raise your hand if you need a break.", hints:["I understand","go slowly","explain everything","raise your hand"]},
+      {speaker:"patient", text:"What if it hurts?", mood:"😟"},
+      {speaker:"doctor", prompt:"Объясни про анестезию", correct:"If you feel any pain, we'll stop and add more numbing. With local anesthesia, most patients feel only a little pressure, not pain.", hints:["we'll stop","more numbing","local anesthesia","only pressure"]},
+      {speaker:"patient", text:"Okay... that makes me feel a bit better.", mood:"🙂"},
+      {speaker:"doctor", prompt:"Похвали и начни мягко", correct:"You're doing great just by being here. Let's start with a gentle look — no treatment today unless you're ready. Take a deep breath and relax.", hints:["doing great","gentle look","no treatment unless ready","take a deep breath"]},
+    ]},
+  { id:"d7", title:"Emergency Phone Call", titleRu:"Неотложный звонок", icon:"🚨", unit:"u14", xp:24,
+    scenario:"A parent calls: their child knocked out a tooth. Guide them.",
+    scenarioRu:"Родитель звонит: у ребёнка выбит зуб. Помоги по телефону.",
+    turns:[
+      {speaker:"patient", text:"Hello? My son fell and knocked out his front tooth! What do I do?", mood:"😱"},
+      {speaker:"doctor", prompt:"Успокой и спроси, нашли ли зуб", correct:"Stay calm — we can help. Did you find the tooth? If yes, pick it up by the crown, not the root.", hints:["stay calm","did you find the tooth","pick it up by the crown","not the root"]},
+      {speaker:"patient", text:"Yes, I have it. It's a bit dirty.", mood:"😟"},
+      {speaker:"doctor", prompt:"Объясни, как сохранить зуб", correct:"Gently rinse it with milk or water and place it in a cup of milk. Do not scrub it. Then come in immediately — time is very important.", hints:["rinse with milk","place it in milk","do not scrub","come in immediately"]},
+      {speaker:"patient", text:"We're coming right now!", mood:"😨"},
+      {speaker:"doctor", prompt:"Подтверди готовность принять", correct:"Perfect. Come straight to the clinic — I'll be ready for you. Try to keep the tooth in the milk the whole way here.", hints:["come straight to the clinic","I'll be ready","keep the tooth in the milk"]},
+    ]},
+  { id:"d8", title:"Aftercare Instructions", titleRu:"Рекомендации после лечения", icon:"🩹", unit:"u13", xp:22,
+    scenario:"After an extraction. Give clear home-care instructions.",
+    scenarioRu:"После удаления. Объясни уход дома.",
+    turns:[
+      {speaker:"patient", text:"So the extraction is done. What should I do at home?", mood:"😐"},
+      {speaker:"doctor", prompt:"Марля и не полоскать сегодня", correct:"Bite gently on this gauze for about 30 minutes. Don't rinse your mouth today — we need the blood clot to protect the socket.", hints:["bite on the gauze","30 minutes","don't rinse today","blood clot"]},
+      {speaker:"patient", text:"Can I eat normally?", mood:"🤔"},
+      {speaker:"doctor", prompt:"Мягкая еда, не горячее, не курить", correct:"Stick to soft, cool food for the first day. Avoid hot drinks, and please don't smoke for at least 48 hours — smoking slows healing.", hints:["soft, cool food","avoid hot drinks","don't smoke","48 hours"]},
+      {speaker:"patient", text:"What about the pain?", mood:"😟"},
+      {speaker:"doctor", prompt:"Обезболивание и холодный компресс", correct:"Take a painkiller every 6 hours if needed, and use a cold compress on your cheek to reduce swelling. If the pain gets worse after 3 days, call us.", hints:["painkiller every 6 hours","cold compress","reduce swelling","call us"]},
+      {speaker:"patient", text:"Got it. Thank you, doctor.", mood:"🙂"},
+      {speaker:"doctor", prompt:"Заверши тепло", correct:"You're welcome — you'll be just fine. Rest today, drink plenty of water, and don't hesitate to call if you have any questions.", hints:["you'll be fine","rest today","drink water","call if you have questions"]},
     ]},
 ];
 
@@ -2000,19 +2692,47 @@ function XPPop({xp,onDone}){
 }
 
 const SK = "toothtalk_v1";
-const DEFAULT = {screen:"welcome",level:null,specialization:null,completedLessons:[],completedDialogues:[],mistakeBank:[],totalXP:0,streak:0,lastDate:null,hearts:3};
+const DEFAULT = {screen:"welcome",level:null,specialization:null,completedLessons:[],completedDialogues:[],mistakeBank:[],totalXP:0,streak:0,lastDate:null,hearts:3,canListen:true,canSpeak:true,passedExams:[]};
 function loadState(){try{const s=localStorage.getItem(SK);return s?{...DEFAULT,...JSON.parse(s)}:DEFAULT}catch{return DEFAULT}}
 function saveState(s){try{localStorage.setItem(SK,JSON.stringify(s))}catch{}}
 
 // ── Speech ────────────────────────────────────────────────────
-function speak(text,rate=0.85){
-  if(!window.speechSynthesis)return;
+// Кэш голосов (грузятся асинхронно) + выбор самого естественного английского голоса
+let _voices=[];
+function _loadVoices(){ try{ _voices=window.speechSynthesis.getVoices()||[]; }catch{} }
+if(typeof window!=="undefined"&&window.speechSynthesis){
+  _loadVoices();
+  window.speechSynthesis.onvoiceschanged=_loadVoices;
+}
+// Приоритет — живые нейросетевые голоса разных платформ (Google, Apple, Microsoft)
+const VOICE_PREFS=[
+  "google us english","microsoft aria","microsoft jenny","microsoft ana","samantha","ava","allison",
+  "google uk english female","serena","microsoft zira","daniel","google uk english male","alex","microsoft mark"
+];
+function bestEnVoice(){
+  const v=_voices.length?_voices:(window.speechSynthesis?.getVoices()||[]);
+  if(!v.length) return null;
+  for(const p of VOICE_PREFS){
+    const f=v.find(x=>x.name&&x.name.toLowerCase().includes(p));
+    if(f) return f;
+  }
+  return v.find(x=>x.lang==="en-US")||v.find(x=>x.lang&&x.lang.startsWith("en"))||null;
+}
+
+// Глобальный выключатель звука — «тихий режим» (не могу слушать)
+let _audioOn=true;
+function setAudioEnabled(v){ _audioOn=v; if(!v&&window.speechSynthesis){try{window.speechSynthesis.cancel();}catch{}} }
+
+function speak(text,rate=0.9){
+  if(!_audioOn) return;
+  if(!window.speechSynthesis||!text)return;
+  // Озвучиваем ТОЛЬКО английский. Русский синтезатор читает плохо и для обучения не нужен.
+  if(/[а-яё]/i.test(text))return;
   window.speechSynthesis.cancel();
   const u=new SpeechSynthesisUtterance(text);
-  u.lang="en-US"; u.rate=rate; u.pitch=1;
-  const voices=window.speechSynthesis.getVoices();
-  const en=voices.find(v=>v.lang.startsWith("en")&&!v.name.includes("Google"))||voices.find(v=>v.lang.startsWith("en"));
-  if(en)u.voice=en;
+  u.rate=rate; u.pitch=1;
+  const voice=bestEnVoice();
+  if(voice){ u.voice=voice; u.lang=voice.lang; } else { u.lang="en-US"; }
   window.speechSynthesis.speak(u);
 }
 
@@ -2026,22 +2746,26 @@ function SpeakBtn({text,size=34}){
 function useSpeechRecognition(){
   const [listening,setListening]=useState(false);
   const [transcript,setTranscript]=useState("");
-  const recRef=useState(null);
+  const [micError,setMicError]=useState(false);
+  const recRef=useRef(null);
+  const supported = typeof window!=="undefined" && !!(window.SpeechRecognition||window.webkitSpeechRecognition);
   function start(){
     const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-    if(!SR)return alert("Speech recognition not supported on this device");
-    const r=new SR();
-    r.lang="en-US"; r.continuous=false; r.interimResults=false;
-    r.onstart=()=>setListening(true);
-    r.onend=()=>setListening(false);
-    r.onresult=(e)=>{const t=e.results[0][0].transcript;setTranscript(t);};
-    r.onerror=()=>setListening(false);
-    recRef[0]=r;
-    r.start();
+    if(!SR){ setMicError(true); return; }
+    try{
+      const r=new SR();
+      r.lang="en-US"; r.continuous=false; r.interimResults=false;
+      r.onstart=()=>{setListening(true);setMicError(false);};
+      r.onend=()=>setListening(false);
+      r.onresult=(e)=>{const t=e.results[0][0].transcript;setTranscript(t);};
+      r.onerror=()=>{setListening(false);setMicError(true);};
+      recRef.current=r;
+      r.start();
+    }catch(e){ setListening(false); setMicError(true); }
   }
-  function stop(){if(recRef[0])recRef[0].stop();}
-  function reset(){setTranscript("");}
-  return {listening,transcript,start,stop,reset};
+  function stop(){ try{ recRef.current&&recRef.current.stop(); }catch{} }
+  function reset(){ setTranscript(""); }
+  return {listening,transcript,start,stop,reset,supported,micError};
 }
 
 function scoreTranscript(transcript,hints){
@@ -2110,13 +2834,13 @@ function Welcome({onStart}){
         <div style={{animation:"float 2.5s ease-in-out infinite 1s"}}><Baby1 size={50}/></div>
       </div>
       <h1 style={{color:"#fff",fontSize:32,fontWeight:900,margin:"10px 0 6px",letterSpacing:-1}}>🦷 ToothTalk</h1>
-      <p style={{color:"#BAE6FD",fontSize:15,marginBottom:8,lineHeight:1.6}}>Английский для<br/><b>хирурга-ортопеда</b></p>
+      <p style={{color:"#BAE6FD",fontSize:15,marginBottom:8,lineHeight:1.6}}>Английский для<br/><b>стоматологов</b></p>
       <div style={{display:"flex",gap:6,flexWrap:"wrap",justifyContent:"center",marginBottom:10}}>
-        {["🔩 Имплантология","👑 Ортопедия","🔪 Хирургия","💬 Диалоги","🎤 Речь"].map(t=>(
+        {["🦷 Терапия","🔩 Импланты","😁 Ортодонтия","👶 Детская","💬 Диалоги","🎤 Речь"].map(t=>(
           <div key={t} style={{background:"rgba(255,255,255,0.12)",borderRadius:20,padding:"5px 12px",color:"#fff",fontSize:12,fontWeight:600}}>{t}</div>
         ))}
       </div>
-      <div style={{color:"#94A3B8",fontSize:12,marginBottom:24}}>65 уроков · 6 специализаций · диалоги · речь</div>
+      <div style={{color:"#94A3B8",fontSize:12,marginBottom:24}}>90+ уроков · 6 специальностей · диалоги · речь</div>
       <Btn onClick={onStart} color="#0EA5E9">Начать →</Btn>
       <style>{`@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}`}</style>
     </div>
@@ -2147,13 +2871,13 @@ function LevelSelect({onSelect}){
           <div style={{animation:"float 2.5s ease-in-out infinite 0.9s"}}><Baby1 size={42}/></div>
         </div>
         <h1 style={{color:"#fff",fontSize:28,fontWeight:900,margin:"0 0 6px",letterSpacing:-1}}>🦷 ToothTalk</h1>
-        <p style={{color:"#BAE6FD",fontSize:14,margin:"0 0 6px",lineHeight:1.6}}>Английский для <b>хирурга-ортопеда</b></p>
+        <p style={{color:"#BAE6FD",fontSize:14,margin:"0 0 6px",lineHeight:1.6}}>Английский для <b>стоматологов</b></p>
         <div style={{display:"flex",gap:6,flexWrap:"wrap",justifyContent:"center",marginBottom:6}}>
-          {["💉 Анестезия","🔪 Хирургия","🔩 Импланты","👑 Ортопедия","💬 Диалоги"].map(t=>(
+          {["💉 Анестезия","🩺 Анамнез","🚨 Неотложные","🌍 Работа за границей","💬 Диалоги"].map(t=>(
             <div key={t} style={{background:"rgba(255,255,255,0.12)",borderRadius:20,padding:"4px 10px",color:"#fff",fontSize:11,fontWeight:600}}>{t}</div>
           ))}
         </div>
-        <p style={{color:"#94A3B8",fontSize:12,margin:"4px 0 0"}}>65 уроков · 6 специализаций · озвучка · диалоги</p>
+        <p style={{color:"#94A3B8",fontSize:12,margin:"4px 0 0"}}>90+ уроков · 6 специальностей · озвучка · диалоги</p>
       </div>
 
       {/* Level Cards */}
@@ -2227,6 +2951,74 @@ function LevelConfirm({level,onGo}){
   );
 }
 
+// ── Экран выбора: тест / с нуля / вручную ────────────────────
+function PlacementIntro({onTest,onBeginner,onManual}){
+  return(
+    <div style={{minHeight:"100vh",background:"linear-gradient(160deg,#0F172A,#1E3A5F,#0EA5E9)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:26,fontFamily:"inherit",textAlign:"center",gap:14}}>
+      <DadChar mood="thinking" size={90}/>
+      <h2 style={{color:"#fff",fontSize:22,fontWeight:900,margin:"4px 0 0"}}>С какого уровня начать?</h2>
+      <p style={{color:"#BAE6FD",fontSize:13,margin:0,lineHeight:1.5,maxWidth:320}}>Пройди короткий тест — приложение само подберёт уровень. Или начни с самых азов.</p>
+      <div style={{width:"100%",maxWidth:340,display:"flex",flexDirection:"column",gap:12,marginTop:8}}>
+        <button onClick={onTest} style={{background:"#0EA5E9",color:"#fff",border:"none",borderRadius:16,padding:"16px",fontWeight:800,fontSize:16,cursor:"pointer",fontFamily:"inherit",boxShadow:"0 6px 18px rgba(14,165,233,0.5)"}}>📝 Пройти тест знаний (2 мин)</button>
+        <button onClick={onBeginner} style={{background:"#10B981",color:"#fff",border:"none",borderRadius:16,padding:"16px",fontWeight:800,fontSize:16,cursor:"pointer",fontFamily:"inherit",boxShadow:"0 6px 18px rgba(16,185,129,0.45)"}}>🌱 Я новичок — начать с нуля</button>
+        <button onClick={onManual} style={{background:"rgba(255,255,255,0.1)",color:"#fff",border:"2px solid rgba(255,255,255,0.2)",borderRadius:16,padding:"14px",fontWeight:700,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>Выбрать уровень самому</button>
+      </div>
+    </div>
+  );
+}
+
+// ── Тест оценки знаний (использует готовые PLACEMENT_Q) ───────
+function PlacementTest({onDone}){
+  const [i,setI]=useState(0);
+  const [correct,setCorrect]=useState(0);
+  const [sel,setSel]=useState(null);
+  const [opts,setOpts]=useState(()=>shuffle(PLACEMENT_Q[0].o));
+  const q=PLACEMENT_Q[i];
+
+  useEffect(()=>{ setOpts(shuffle(PLACEMENT_Q[i].o)); setSel(null); },[i]);
+
+  function choose(o){
+    if(sel!==null) return;
+    setSel(o);
+    const isC=o===q.a;
+    if(isC){ setCorrect(c=>c+1); playSound("correct"); haptic("success"); }
+    else { playSound("wrong"); haptic("error"); }
+    setTimeout(()=>{
+      if(i+1>=PLACEMENT_Q.length){
+        const total=PLACEMENT_Q.length;
+        const finalCorrect=correct+(isC?1:0);
+        onDone(getLevel(finalCorrect/total), finalCorrect, total);
+      } else setI(x=>x+1);
+    },750);
+  }
+
+  return(
+    <div style={{minHeight:"100vh",background:"#0F172A",display:"flex",flexDirection:"column",fontFamily:"inherit"}}>
+      <div style={{padding:"16px 18px"}}>
+        <Bar v={i} m={PLACEMENT_Q.length} color="#0EA5E9"/>
+        <div style={{color:"#64748B",fontSize:11,fontWeight:700,marginTop:6}}>ВОПРОС {i+1} / {PLACEMENT_Q.length}</div>
+      </div>
+      <div style={{flex:1,padding:"8px 18px",display:"flex",flexDirection:"column",gap:12}}>
+        <div style={{background:"#1E293B",borderRadius:16,padding:"18px 16px"}}>
+          <div style={{color:"#fff",fontSize:17,fontWeight:700,lineHeight:1.5}}>{q.q}</div>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {opts.map(o=>{
+            const isC=o===q.a, isSel=sel===o;
+            let bg="#1E293B",border="2px solid #334155",col="#E2E8F0";
+            if(sel!==null&&isC){bg="#065F46";border="2px solid #10B981";col="#fff";}
+            else if(isSel&&!isC){bg="#7F1D1D";border="2px solid #EF4444";col="#fff";}
+            return <button key={o} disabled={sel!==null} onClick={()=>choose(o)}
+              style={{background:bg,border,color:col,borderRadius:14,padding:"14px 16px",fontSize:15,fontWeight:600,textAlign:"left",cursor:sel!==null?"default":"pointer",fontFamily:"inherit",transition:"all 0.15s"}}>
+              {o}{sel!==null&&isC?" ✓":""}
+            </button>;
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Кликабельные слова ───────────────────────────────────────
 function ClickableText({text, style={}}){
   const words = text.split(" ");
@@ -2248,14 +3040,113 @@ function ClickableText({text, style={}}){
   );
 }
 
+// ── ФИНАЛЬНЫЙ ЭКЗАМЕН БЛОКА ───────────────────────────────────
+function ExamScreen({unit, onPass, onExit}){
+  const questions=useMemo(()=>{
+    const cards=unit.lessons.flatMap(l=>l.cards||[]).filter(c=>c.w&&c.t);
+    const allRU=ALL_CARDS.map(c=>c.t), allEN=ALL_CARDS.map(c=>c.w);
+    const picked=shuffle(cards).slice(0,Math.min(10,cards.length));
+    return picked.map((c,idx)=>{
+      if(idx%2===0){ // EN → выбери перевод
+        const wrong=topUpDistractors(shuffle(cards.filter(x=>x.t!==c.t).map(x=>x.t)).slice(0,3),3,allRU,c.t);
+        return {q:`Что означает «${c.w}»?`,a:c.t,o:shuffle([c.t,...wrong])};
+      } else { // RU → выбери английский
+        const wrong=topUpDistractors(shuffle(cards.filter(x=>x.w!==c.w).map(x=>x.w)).slice(0,3),3,allEN,c.w);
+        return {q:`Как сказать «${c.t}»?`,a:c.w,o:shuffle([c.w,...wrong])};
+      }
+    });
+  },[unit.id]);
+
+  const [i,setI]=useState(0);
+  const [correct,setCorrect]=useState(0);
+  const [sel,setSel]=useState(null);
+  const [done,setDone]=useState(false);
+  const q=questions[i]||{};
+
+  // Защита: если в блоке нет карточек — не падаем
+  if(questions.length===0) return (
+    <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:14,padding:24,background:"#F0F9FF",textAlign:"center"}}>
+      <div style={{fontSize:44}}>🎓</div>
+      <div style={{fontSize:16,fontWeight:800,color:"#0F172A"}}>Экзамен пока недоступен</div>
+      <Btn onClick={onExit} color="#0EA5E9">На главную</Btn>
+    </div>
+  );
+
+  function choose(o){
+    if(sel!==null) return;
+    setSel(o);
+    const isC=o===q.a;
+    if(isC){setCorrect(c=>c+1);playSound("correct");haptic("success");}
+    else{playSound("wrong");haptic("error");}
+    setTimeout(()=>{
+      if(i+1>=questions.length){ playSound("complete"); haptic("heavy"); setDone(true); }
+      else { setSel(null); setI(x=>x+1); }
+    },650);
+  }
+
+  if(done){
+    const score=correct/questions.length;
+    const passed=score>=0.7;
+    return(
+      <div style={{minHeight:"100vh",background:passed?"linear-gradient(160deg,#065F46,#10B981)":"linear-gradient(160deg,#7C2D12,#EA580C)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:26,textAlign:"center",fontFamily:"inherit"}}>
+        {passed&&<Confetti/>}
+        <div style={{fontSize:60,marginBottom:8}}>{passed?"🎓":"💪"}</div>
+        <div style={{background:"#fff",borderRadius:24,padding:"26px 22px",maxWidth:340,width:"100%"}}>
+          <div style={{fontSize:22,fontWeight:900,color:passed?"#10B981":"#EA580C",marginBottom:6}}>{passed?"Блок пройден!":"Почти получилось!"}</div>
+          <div style={{fontSize:14,color:"#64748B",marginBottom:8}}>{unit.icon} {unit.titleRu}</div>
+          <div style={{fontSize:34,fontWeight:900,color:"#0F172A"}}>{correct} / {questions.length}</div>
+          <div style={{fontSize:13,color:"#94A3B8",marginBottom:18}}>{passed?"Отличный результат — ты уверенно владеешь блоком!":"Нужно 70%. Повтори блок и попробуй снова."}</div>
+          {passed
+            ?<Btn onClick={onPass} color="#10B981">Забрать награду 🏆</Btn>
+            :<div style={{display:"flex",flexDirection:"column",gap:8}}>
+              <Btn onClick={()=>{setI(0);setCorrect(0);setSel(null);setDone(false);}} color="#EA580C">Попробовать снова</Btn>
+              <button onClick={onExit} style={{background:"none",border:"none",color:"#94A3B8",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Позже</button>
+            </div>}
+        </div>
+      </div>
+    );
+  }
+
+  return(
+    <div style={{minHeight:"100vh",background:"#0F172A",display:"flex",flexDirection:"column",fontFamily:"inherit"}}>
+      <div style={{padding:"16px 18px",display:"flex",alignItems:"center",gap:10}}>
+        <button onClick={onExit} style={{background:"none",border:"none",color:"#94A3B8",fontSize:20,cursor:"pointer"}}>✕</button>
+        <div style={{flex:1}}><Bar v={i} m={questions.length} color={unit.color}/></div>
+        <span style={{color:"#94A3B8",fontSize:11,fontWeight:700}}>{i+1}/{questions.length}</span>
+      </div>
+      <div style={{textAlign:"center",padding:"4px 18px"}}>
+        <span style={{background:unit.color,color:"#fff",fontSize:11,fontWeight:800,letterSpacing:1,padding:"4px 12px",borderRadius:999}}>🎓 ЭКЗАМЕН · {unit.titleRu}</span>
+      </div>
+      <div style={{flex:1,padding:"12px 18px",display:"flex",flexDirection:"column",gap:12}}>
+        <div style={{background:"#1E293B",borderRadius:16,padding:"18px 16px"}}>
+          <div style={{color:"#fff",fontSize:17,fontWeight:700,lineHeight:1.5}}>{q.q}</div>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {(q.o||[]).map(o=>{
+            const isC=o===q.a,isSel=sel===o;
+            let bg="#1E293B",border="2px solid #334155",col="#E2E8F0";
+            if(sel!==null&&isC){bg="#065F46";border="2px solid #10B981";col="#fff";}
+            else if(isSel&&!isC){bg="#7F1D1D";border="2px solid #EF4444";col="#fff";}
+            return <button key={o} disabled={sel!==null} onClick={()=>choose(o)}
+              style={{background:bg,border,color:col,borderRadius:14,padding:"14px 16px",fontSize:15,fontWeight:600,textAlign:"left",cursor:sel!==null?"default":"pointer",fontFamily:"inherit"}}>
+              {o}{sel!==null&&isC?" ✓":""}
+            </button>;
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── HOME ──────────────────────────────────────────────────────
-function Home({state,onLesson,onDialogue,onMistakes,onProgress,onReset,onReview,onAchievements}){
+function Home({state,onLesson,onDialogue,onMistakes,onProgress,onReset,onReview,onAchievements,onExam}){
   const {completedLessons,completedDialogues,mistakeBank,totalXP,streak,hearts}=state;
-  const done=completedLessons.length;
-  const next=ALL_LESSONS.find(l=>!completedLessons.includes(l.id));
+  // Только блоки/уроки выбранной специальности (общие + свои)
+  const myUnits=unitsFor(state.specialization);
+  const myLessons=lessonsFor(state.specialization);
+  const done=myLessons.filter(l=>completedLessons.includes(l.id)).length;
+  const next=myLessons.find(l=>!completedLessons.includes(l.id));
   const [tab,setTab]=useState("lessons");
-  const [openUnits,setOpenUnits]=useState({"u1":true});
-  function toggleUnit(id){setOpenUnits(o=>({...o,[id]:!o[id]}));}
 
   const srsWords=getSRSWords();
   const hasSRS=srsWords.length>0;
@@ -2289,10 +3180,10 @@ function Home({state,onLesson,onDialogue,onMistakes,onProgress,onReset,onReview,
           <DadChar mood="happy" size={48}/><MomChar mood="happy" size={42}/><Girl4 size={28}/><Baby1 size={24}/>
           <div style={{marginLeft:6,flex:1}}>
             <div style={{color:"#fff",fontSize:12,fontWeight:700}}>Семья болеет! 💪</div>
-            <div style={{color:"#64748B",fontSize:11}}>{done}/{ALL_LESSONS.length} уроков · {completedDialogues.length}/{DIALOGUES.length} диалогов</div>
+            <div style={{color:"#64748B",fontSize:11}}>{done}/{myLessons.length} уроков · {completedDialogues.length}/{DIALOGUES.length} диалогов</div>
           </div>
         </div>
-        <Bar v={done} m={ALL_LESSONS.length} color="#0EA5E9" h={6}/>
+        <Bar v={done} m={myLessons.length} color="#0EA5E9" h={6}/>
         <div style={{display:"flex",gap:8,margin:"10px 0 0"}}>
           {[{i:"🔥",l:"Серия",v:`${streak}д`},{i:"⚡",l:"XP",v:totalXP},{i:"❤️",l:"Жизни",v:`${hearts}/3`},{i:"📝",l:"Ошибки",v:mistakeBank.length}].map(s=>(
             <div key={s.l} style={{flex:1,background:"rgba(255,255,255,0.08)",borderRadius:10,padding:"6px 2px",textAlign:"center"}}>
@@ -2328,41 +3219,54 @@ function Home({state,onLesson,onDialogue,onMistakes,onProgress,onReset,onReview,
               </div>
             </div>
           )}
-          {UNITS.map(unit=>{
+          {myUnits.map(unit=>{
             const ud=unit.lessons.filter(l=>completedLessons.includes(l.id)).length;
-            const isOpen=openUnits[unit.id];
+            const examUnlocked=ud===unit.lessons.length;
+            const passed=(state.passedExams||[]).includes(unit.id);
             return(
-              <div key={unit.id} style={{marginBottom:10}}>
-                <div onClick={()=>toggleUnit(unit.id)} style={{background:"#fff",borderRadius:14,padding:"12px 14px",display:"flex",alignItems:"center",gap:10,cursor:"pointer",border:`2px solid ${ud===unit.lessons.length?unit.color:"transparent"}`,boxShadow:"0 1px 4px rgba(0,0,0,0.05)"}}>
-                  <div style={{width:36,height:36,borderRadius:10,background:unit.color+"22",display:"flex",alignItems:"center",justifyContent:"center",fontSize:17}}>{unit.icon}</div>
+              <div key={unit.id} style={{marginBottom:4}}>
+                {/* Заголовок блока */}
+                <div style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",background:unit.color+"14",borderRadius:12,margin:"10px 0 8px"}}>
+                  <div style={{fontSize:20}}>{unit.icon}</div>
                   <div style={{flex:1}}>
-                    <div style={{fontWeight:700,fontSize:13,color:"#1E293B"}}>{unit.title}</div>
-                    <div style={{fontSize:10,color:"#64748B"}}>{unit.titleRu}</div>
-                    <div style={{marginTop:3}}><Bar v={ud} m={unit.lessons.length} color={unit.color} h={4}/></div>
+                    <div style={{fontWeight:800,fontSize:13,color:"#0F172A"}}>{unit.titleRu}</div>
+                    <div style={{fontSize:10,color:"#64748B"}}>{unit.title}</div>
                   </div>
-                  <div style={{fontSize:12,fontWeight:700,color:unit.color}}>{ud}/{unit.lessons.length}</div>
-                  <div style={{fontSize:11,color:"#94A3B8"}}>{isOpen?"▲":"▼"}</div>
+                  <div style={{fontSize:11,fontWeight:800,color:unit.color}}>{ud}/{unit.lessons.length}</div>
                 </div>
-                {isOpen&&(
-                  <div style={{paddingLeft:6,paddingTop:4,display:"flex",flexDirection:"column",gap:4}}>
-                    {unit.lessons.map((lesson,idx)=>{
-                      const comp=completedLessons.includes(lesson.id);
-                      const isNext=lesson.id===next?.id;
-                      const prevLesson=unit.lessons[idx-1];
-                      const locked=idx>0&&!completedLessons.includes(prevLesson?.id)&&!comp&&!isNext;
-                      return(
-                        <div key={lesson.id} onClick={()=>!locked&&onLesson(lesson)} style={{background:"#fff",borderRadius:12,padding:"10px 12px",display:"flex",alignItems:"center",gap:8,border:isNext?`2px solid ${unit.color}`:comp?"2px solid #D1FAE5":"2px solid transparent",opacity:locked?0.4:1,cursor:locked?"not-allowed":"pointer",boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
-                          <div style={{width:32,height:32,borderRadius:8,background:comp?"#D1FAE5":isNext?unit.color+"22":"#F1F5F9",display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,flexShrink:0}}>{comp?"✅":locked?"🔒":lesson.icon}</div>
-                          <div style={{flex:1}}>
-                            <div style={{fontWeight:600,fontSize:12,color:"#1E293B"}}>День {lesson.day}: {lesson.title}</div>
-                            <div style={{fontSize:10,color:"#64748B"}}>{lesson.titleRu}</div>
-                          </div>
-                          <div style={{fontSize:11,fontWeight:700,color:unit.color}}>+{lesson.xp}</div>
+                {/* Тропинка уроков */}
+                {unit.lessons.map(lesson=>{
+                  const comp=completedLessons.includes(lesson.id);
+                  const isNext=lesson.id===next?.id;
+                  const locked=!comp&&!isNext;
+                  return(
+                    <div key={lesson.id} style={{display:"flex",gap:12}}>
+                      <div style={{width:46,display:"flex",flexDirection:"column",alignItems:"center"}}>
+                        <div onClick={()=>!locked&&onLesson(lesson)} style={{width:isNext?46:36,height:isNext?46:36,borderRadius:"50%",background:comp?"#10B981":isNext?unit.color:"#E2E8F0",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:isNext?18:15,cursor:locked?"default":"pointer",boxShadow:isNext?`0 0 0 5px ${unit.color}33`:"none",flexShrink:0}}>{comp?"✓":locked?"🔒":lesson.icon}</div>
+                        <div style={{flex:1,width:3,background:comp?"#10B981":"#E2E8F0",minHeight:14}}/>
+                      </div>
+                      <div onClick={()=>!locked&&onLesson(lesson)} style={{flex:1,paddingBottom:10,opacity:locked?0.55:1,cursor:locked?"default":"pointer"}}>
+                        <div style={{background:isNext?unit.color+"14":"#fff",borderRadius:12,padding:"10px 12px",border:isNext?`2px solid ${unit.color}`:"1px solid #EEF2F6"}}>
+                          <div style={{fontWeight:700,fontSize:12.5,color:"#1E293B"}}>{lesson.title}</div>
+                          <div style={{fontSize:10.5,color:"#64748B"}}>{lesson.titleRu}</div>
+                          {isNext&&<div style={{marginTop:6,display:"inline-block",background:unit.color,color:"#fff",borderRadius:8,padding:"3px 10px",fontSize:11,fontWeight:800}}>▶ Начать · +{lesson.xp} XP</div>}
                         </div>
-                      );
-                    })}
+                      </div>
+                    </div>
+                  );
+                })}
+                {/* Экзамен блока — узел в конце тропинки */}
+                <div style={{display:"flex",gap:12}}>
+                  <div style={{width:46,display:"flex",justifyContent:"center"}}>
+                    <div onClick={()=>examUnlocked&&onExam&&onExam(unit)} style={{width:40,height:40,borderRadius:"50%",background:passed?"#F59E0B":examUnlocked?unit.color:"#E2E8F0",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,cursor:examUnlocked?"pointer":"default",boxShadow:examUnlocked&&!passed?`0 0 0 5px ${unit.color}33`:"none",flexShrink:0}}>{passed?"🏆":examUnlocked?"🎓":"🔒"}</div>
                   </div>
-                )}
+                  <div onClick={()=>examUnlocked&&onExam&&onExam(unit)} style={{flex:1,paddingBottom:10,opacity:examUnlocked?1:0.55,cursor:examUnlocked?"pointer":"default"}}>
+                    <div style={{background:passed?"#ECFDF5":examUnlocked?unit.color+"14":"#fff",borderRadius:12,padding:"10px 12px",border:passed?"2px solid #10B981":examUnlocked?`2px solid ${unit.color}`:"1px solid #EEF2F6"}}>
+                      <div style={{fontWeight:800,fontSize:12.5,color:"#0F172A"}}>{passed?"🏆 Экзамен сдан":"🎓 Экзамен блока"}</div>
+                      <div style={{fontSize:10.5,color:"#64748B"}}>{examUnlocked?(passed?"Можно пересдать":"Проверь себя на весь блок"):"Пройди все уроки блока"}</div>
+                    </div>
+                  </div>
+                </div>
               </div>
             );
           })}
@@ -2560,7 +3464,10 @@ function DialogueScreen({dialogue,onComplete,onExit}){
               <button onClick={handleSpeak} style={{flex:1,background:listening?"#EF4444":"#0EA5E9",color:"#fff",border:"none",borderRadius:12,padding:"12px",fontWeight:700,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>
                 {listening?"⏹ Стоп":"🎤 Говори"}
               </button>
-              {transcript&&<button onClick={handleSubmit} style={{flex:1,background:"#10B981",color:"#fff",border:"none",borderRadius:12,padding:"12px",fontWeight:700,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>Проверить ✓</button>}
+              {/* Кнопка всегда доступна — без микрофона показываем идеальный ответ (не застреваем) */}
+              <button onClick={handleSubmit} style={{flex:1,background:"#10B981",color:"#fff",border:"none",borderRadius:12,padding:"12px",fontWeight:700,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>
+                {transcript?"Проверить ✓":"Показать ответ →"}
+              </button>
             </div>
             <div style={{marginTop:8,fontSize:11,color:"#94A3B8",textAlign:"center"}}>или посмотри подсказку ↓</div>
             <div style={{marginTop:6,display:"flex",flexWrap:"wrap",gap:4}}>
@@ -2596,7 +3503,7 @@ function DialogueScreen({dialogue,onComplete,onExit}){
 }
 
 // ── LESSON SCREEN ─────────────────────────────────────────────
-function LessonScreen({lesson,hearts,onLoseHeart,onComplete,onExit,onAddMistake}){
+function LessonScreen({lesson,hearts,onLoseHeart,onComplete,onExit,onAddMistake,canListen=true,canSpeak=true,onToggleListen,onToggleSpeak}){
   const cards=lesson.cards||[];
   const quizzes=lesson.quiz||[];
   const [phase,setPhase]=useState(cards.length>0?"cards":"quiz");
@@ -2604,6 +3511,9 @@ function LessonScreen({lesson,hearts,onLoseHeart,onComplete,onExit,onAddMistake}
   const [flipped,setFlipped]=useState(false);
   const [xpPop,setXpPop]=useState(0);
   const [showConfetti,setShowConfetti]=useState(false);
+
+  // «Не могу слушать» → глушим звук на весь урок (включая фазу карточек)
+  useEffect(()=>{ setAudioEnabled(canListen); return ()=>setAudioEnabled(true); },[canListen]);
 
   useEffect(()=>{
     if(phase==="cards"&&cards[cardIdx]) speak(cards[cardIdx].w);
@@ -2627,6 +3537,10 @@ function LessonScreen({lesson,hearts,onLoseHeart,onComplete,onExit,onAddMistake}
       onComplete={onComplete}
       onAddMistake={onAddMistake}
       onExit={onExit}
+      canListen={canListen}
+      canSpeak={canSpeak}
+      onToggleListen={onToggleListen}
+      onToggleSpeak={onToggleSpeak}
     />;
   }
 
@@ -2634,22 +3548,34 @@ function LessonScreen({lesson,hearts,onLoseHeart,onComplete,onExit,onAddMistake}
   const card=cards[cardIdx];
   const totalSteps=cards.length+quizzes.length;
 
+  const flip=()=>{haptic("light");playSound("flip");if(!flipped)speak(card.e,0.8);setFlipped(f=>!f);};
+
   return(
     <div style={{minHeight:"100vh",background:"#F8FAFC",fontFamily:"inherit",display:"flex",flexDirection:"column"}}>
       {xpPop>0&&<XPPop xp={xpPop} onDone={()=>setXpPop(0)}/>}
-      <div style={{background:"#1E293B",padding:"15px 18px",display:"flex",alignItems:"center",gap:12}}>
+      <div style={{background:"#1E293B",padding:"15px 18px",display:"flex",alignItems:"center",gap:10}}>
         <button onClick={onExit} style={{background:"none",border:"none",color:"#94A3B8",fontSize:20,cursor:"pointer"}}>✕</button>
         <div style={{flex:1}}><Bar v={cardIdx} m={totalSteps} color="#0EA5E9"/></div>
+        {onToggleListen&&<QuietToggle canListen={canListen} canSpeak={canSpeak} onToggleListen={onToggleListen} onToggleSpeak={onToggleSpeak}/>}
         <span style={{color:"#94A3B8",fontSize:11,fontWeight:700}}>{cardIdx+1}/{cards.length}</span>
       </div>
-      <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"20px 18px",gap:14}}>
-        <div style={{fontSize:11,color:"#94A3B8",fontWeight:700,letterSpacing:1}}>НОВАЯ ФРАЗА · {cardIdx+1}/{cards.length}</div>
-        <FlipCard3D card={card} flipped={flipped} onFlip={()=>{haptic("light");playSound("flip");if(!flipped)speak(card.e,0.8);setFlipped(f=>!f);}}/>
-        {flipped&&<div style={{display:"flex",gap:10}}>
-          <button onPointerDown={()=>haptic("select")} onClick={nextCard} style={{background:"#10B981",color:"#fff",border:"none",borderRadius:14,padding:"11px 22px",fontWeight:700,fontSize:14,cursor:"pointer",fontFamily:"inherit",boxShadow:"0 4px 12px #10B98155"}}>Знаю ✓</button>
-          <button onPointerDown={()=>haptic("select")} onClick={()=>{speak(card.w);nextCard();}} style={{background:"#F1F5F9",color:"#64748B",border:"none",borderRadius:14,padding:"11px 22px",fontWeight:700,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>🔊 Ещё раз</button>
-        </div>}
-        <DadChar mood="happy" size={65}/>
+      {/* Карточка по центру */}
+      <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"20px 18px",gap:16}}>
+        {/* Плашка нового слова — как в Duolingo */}
+        {card.new
+          ?<div style={{background:"#8B5CF6",color:"#fff",fontWeight:900,fontSize:13,letterSpacing:1.5,padding:"6px 16px",borderRadius:999,boxShadow:"0 4px 14px rgba(139,92,246,0.45)"}}>✨ НОВОЕ СЛОВО</div>
+          :<div style={{fontSize:11,color:"#94A3B8",fontWeight:700,letterSpacing:1}}>ФРАЗА · {cardIdx+1}/{cards.length}</div>}
+        <FlipCard3D card={card} flipped={flipped} onFlip={flip}/>
+        <DadChar mood="happy" size={60}/>
+      </div>
+      {/* Нижняя панель с кнопками — не налезает на карточку */}
+      <div style={{padding:"12px 18px",background:"#fff",borderTop:"1px solid #E2E8F0"}}>
+        {!flipped
+          ?<Btn onClick={flip} color="#0EA5E9">Показать перевод 👆</Btn>
+          :<div style={{display:"flex",gap:10}}>
+            <button onPointerDown={()=>haptic("select")} onClick={nextCard} style={{flex:1,background:"#10B981",color:"#fff",border:"none",borderRadius:14,padding:"13px 0",fontWeight:800,fontSize:15,cursor:"pointer",fontFamily:"inherit",boxShadow:"0 4px 12px #10B98155"}}>Знаю ✓</button>
+            <button onPointerDown={()=>haptic("select")} onClick={()=>{speak(card.w);}} style={{flex:1,background:"#F1F5F9",color:"#64748B",border:"none",borderRadius:14,padding:"13px 0",fontWeight:700,fontSize:15,cursor:"pointer",fontFamily:"inherit"}}>🔊 Ещё раз</button>
+          </div>}
       </div>
     </div>
   );
@@ -2700,7 +3626,8 @@ function MistakesDrill({mistakes,onComplete,onExit}){
 // ── PROGRESS ──────────────────────────────────────────────────
 function ProgressScreen({state,onBack,onChangeSpec}){
   const {level,completedLessons,completedDialogues,totalXP,streak,mistakeBank,specialization}=state;
-  const done=completedLessons.length;
+  const myLessons=lessonsFor(specialization);
+  const done=myLessons.filter(l=>completedLessons.includes(l.id)).length;
   return(
     <div style={{minHeight:"100vh",background:"#F8FAFC",fontFamily:"inherit"}}>
       <div style={{background:"linear-gradient(135deg,#0F172A,#1E3A5F)",padding:"18px 18px 22px",color:"#fff"}}>
@@ -2709,8 +3636,8 @@ function ProgressScreen({state,onBack,onChangeSpec}){
           <DadChar mood="happy" size={70}/><MomChar mood="happy" size={62}/>
           <div><div style={{fontSize:18,fontWeight:800}}>Мой прогресс</div><div style={{fontSize:12,color:"#94A3B8"}}>{LEVEL_LABELS[level]||"Начинающий"}</div></div>
         </div>
-        <Bar v={done} m={ALL_LESSONS.length} color="#0EA5E9" h={8}/>
-        <div style={{color:"#94A3B8",fontSize:11,marginTop:4}}>{done} / {ALL_LESSONS.length} уроков</div>
+        <Bar v={done} m={myLessons.length} color="#0EA5E9" h={8}/>
+        <div style={{color:"#94A3B8",fontSize:11,marginTop:4}}>{done} / {myLessons.length} уроков</div>
       </div>
       <div style={{padding:"16px 16px 80px"}}>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
@@ -2749,6 +3676,7 @@ function ProgressScreen({state,onBack,onChangeSpec}){
 export default function App(){
   const [state,setState]=useState(loadState);
   const [activeLesson,setActiveLesson]=useState(null);
+  const [activeExam,setActiveExam]=useState(null);
   const [activeDialogue,setActiveDialogue]=useState(null);
   const [testCorrect,setTestCorrect]=useState(0);
   const [mistakeDrill,setMistakeDrill]=useState(false);
@@ -2771,36 +3699,74 @@ export default function App(){
     });
   }
 
-  // ── новый флоу: welcome → specialization → levelselect → confirm → home
-  // Если уже есть специализация и уровень — сразу home
-  if(state.screen==="welcome" && state.specialization && state.level){
-    return <Home
-      state={state}
-      onLesson={l=>{setActiveLesson(l);go("lesson");}}
-      onDialogue={d=>{setActiveDialogue(d);go("dialogue");}}
-      onMistakes={()=>setMistakeDrill(true)}
-      onProgress={()=>go("progress")}
-      onReset={()=>{const r={...DEFAULT};setState(r);saveState(r);setActiveLesson(null);setActiveDialogue(null);}}
-    />;
-  }
-  if(state.screen==="welcome")return <Welcome onStart={()=>go("specialization")}/>;
+  // ── флоу онбординга: welcome → specialization → levelselect → confirm → home
+  // Онбординг показываем только если ещё НЕ выбраны специализация и уровень.
+  // Если выбраны — проваливаемся к полному Home внизу (со всеми кнопками).
+  if(state.screen==="welcome" && !(state.specialization && state.level))
+    return <Welcome onStart={()=>go("specialization")}/>;
   if(state.screen==="specialization")return <SpecializationSelect onSelect={sp=>{
-    setState(s=>({...s,specialization:sp,screen:"levelselect"}));
+    setState(s=>({...s,specialization:sp,screen:"placement"}));
   }}/>;
+  // Экран выбора: тест / с нуля / вручную
+  if(state.screen==="placement")return <PlacementIntro
+    onTest={()=>go("placementtest")}
+    onBeginner={()=>setState(s=>({...s,level:"beginner",screen:"levelconfirm"}))}
+    onManual={()=>go("levelselect")}
+  />;
+  // Тест оценки знаний → определяет уровень автоматически
+  if(state.screen==="placementtest")return <PlacementTest
+    onDone={(lvl)=>setState(s=>({...s,level:lvl,screen:"levelconfirm"}))}
+  />;
   if(state.screen==="levelselect")return <LevelSelect onSelect={lvl=>{
     setState(s=>({...s,level:lvl,screen:"levelconfirm"}));
   }}/>;
   if(state.screen==="levelconfirm")return <LevelConfirm level={state.level} onGo={()=>{
-    // начинаем с нужного урока по уровню
-    const startInfo=LEVEL_START[state.level];
-    const startLesson=ALL_LESSONS.find(l=>l.id===startInfo?.lesson)||ALL_LESSONS[0];
-    // разблокируем все уроки до стартового
-    const startIdx=ALL_LESSONS.findIndex(l=>l.id===startLesson.id);
-    const unlocked=ALL_LESSONS.slice(0,startIdx).map(l=>l.id);
+    // Разблокируем часть ВИДИМОГО трека специальности пропорционально уровню
+    const visible=lessonsFor(state.specialization);
+    const frac=state.level==="advanced"?0.6:state.level==="intermediate"?0.35:0;
+    const startIdx=Math.floor(visible.length*frac);
+    const unlocked=visible.slice(0,startIdx).map(l=>l.id);
     setState(s=>({...s,completedLessons:unlocked,screen:"home"}));
   }}/>;
   if(state.screen==="achievements")return <AchievementsScreen state={state} onBack={()=>go("home")}/>;
   if(state.screen==="progress")return <ProgressScreen state={state} onBack={()=>go("home")} onChangeSpec={()=>go("specialization")}/>;
+
+  // Экран интервального повторения (SRS): собираем карточки по словам и прогоняем через движок
+  if(state.screen==="srsreview"){
+    const reviewCards=(srsReview||[]).map(s=>ALL_CARDS.find(c=>c.w===s.word)).filter(Boolean);
+    if(reviewCards.length===0) return (
+      <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16,padding:24,background:"#F0F9FF",textAlign:"center"}}>
+        <div style={{fontSize:44}}>🎉</div>
+        <div style={{fontSize:18,fontWeight:800,color:"#0F172A"}}>Пока нечего повторять!</div>
+        <div style={{fontSize:14,color:"#64748B"}}>Возвращайся позже — слова придут на повторение по расписанию.</div>
+        <Btn onClick={()=>go("home")} color="#0EA5E9">На главную</Btn>
+      </div>
+    );
+    const reviewLesson={id:"srs_review",title:"Повторение слов",titleRu:"Повторение",icon:"🔁",xp:15,cards:reviewCards};
+    return <QuizEngine
+      cards={reviewCards} quizzes={[]} lesson={reviewLesson} hearts={state.hearts}
+      onLoseHeart={()=>setState(s=>({...s,hearts:Math.max(0,s.hearts-1)}))}
+      onAddMistake={addMistake}
+      onComplete={xp=>{updateStreak();updateWeeklyStats("xp",xp);setState(s=>({...s,totalXP:s.totalXP+xp,hearts:Math.min(3,s.hearts+1),screen:"home"}));}}
+      onExit={()=>go("home")}
+      canListen={state.canListen!==false} canSpeak={state.canSpeak!==false}
+      onToggleListen={()=>setState(s=>({...s,canListen:s.canListen===false}))}
+      onToggleSpeak={()=>setState(s=>({...s,canSpeak:s.canSpeak===false}))}
+    />;
+  }
+
+  if(state.screen==="exam"&&activeExam)return(
+    <ExamScreen unit={activeExam}
+      onPass={()=>{
+        setState(s=>({...s,
+          passedExams:(s.passedExams||[]).includes(activeExam.id)?s.passedExams:[...(s.passedExams||[]),activeExam.id],
+          totalXP:s.totalXP+30, screen:"home"
+        }));
+        setActiveExam(null);
+      }}
+      onExit={()=>{setActiveExam(null);go("home");}}
+    />
+  );
 
   if(state.screen==="lesson"&&activeLesson)return(
     <LessonScreen lesson={activeLesson} hearts={state.hearts}
@@ -2821,6 +3787,9 @@ export default function App(){
         setActiveLesson(null);
       }}
       onExit={()=>{setActiveLesson(null);go("home");}}
+      canListen={state.canListen!==false} canSpeak={state.canSpeak!==false}
+      onToggleListen={()=>setState(s=>({...s,canListen:s.canListen===false}))}
+      onToggleSpeak={()=>setState(s=>({...s,canSpeak:s.canSpeak===false}))}
     />
   );
 
@@ -2854,6 +3823,7 @@ export default function App(){
     onMistakes={()=>setMistakeDrill(true)}
     onProgress={()=>go("progress")}
     onAchievements={()=>go("achievements")}
+    onExam={u=>{setActiveExam(u);go("exam");}}
     onReview={words=>{setSrsReview(words);go("srsreview");}}
     onReset={()=>{const r={...DEFAULT};setState(r);saveState(r);setActiveLesson(null);setActiveDialogue(null);}}
   /></>;
