@@ -762,7 +762,7 @@ function QuizEngine({quizzes:rawQuizzes, cards, lesson, hearts, onLoseHeart, onC
   const [typed,setTyped]=useState("");
   const [wordOrder,setWordOrder]=useState({available:[],chosen:[]});
   const [confirmed,setConfirmed]=useState(false);
-  const [localH,setLocalH]=useState(hearts);
+  const [localH,setLocalH]=useState(3); // каждый урок начинается с 3 сердец
   const [xp,setXp]=useState(0);
   const [xpPop,setXpPop]=useState(0);
   const [shake,setShake]=useState(false);
@@ -845,7 +845,7 @@ function QuizEngine({quizzes:rawQuizzes, cards, lesson, hearts, onLoseHeart, onC
   }
 
   function next(){
-    if(localH===0){onExit();return;}
+    // Урок больше не прерывается при 0 сердец — всегда можно довести до конца
     if(step+1>=quizzes.length){
       playSound("complete");haptic("heavy");
       setShowConfetti(true);setDone(true);
