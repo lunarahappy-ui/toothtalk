@@ -35,7 +35,7 @@ def load_cfg():
         "token": token,
         "webapp_url": cfg.get("webapp_url", "https://toothtalk-murex.vercel.app"),
         # часы (по серверному времени) для напоминаний
-        "reminder_hours": cfg.get("reminder_hours", [10, 19]),
+        "reminder_hours": cfg.get("reminder_hours", [11, 23]),
     }
 
 CFG = load_cfg()
@@ -138,7 +138,12 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_users(USERS)
         await update.message.reply_text(
             f"Отлично, {u['name']}! Мечта записана 🎯\n\n"
-            "Я буду мягко напоминать про занятия. А сейчас — начнём?",
+            "<b>Как это работает:</b>\n"
+            "1️⃣ Жми «Открыть тренажёр» — занимайся 5–10 минут в день\n"
+            "2️⃣ Я буду напоминать в 10:00 и 19:00 — не потеряешь темп\n"
+            "3️⃣ /progress — глянуть прогресс, /stop — выключить напоминания\n\n"
+            "Начнём? 👇",
+            parse_mode=ParseMode.HTML,
             reply_markup=open_kb(),
         )
         return
